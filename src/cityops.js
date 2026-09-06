@@ -970,8 +970,20 @@ var CityOps = (function () {
   ];
   var TAB_IDS = TABS.map(function (t) { return t.id; });
 
-  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars'];
-  var DO_SECTION_IDS = ['activities', 'interests'];
+  // The ids PROMPT.md pins, plus the synonyms a model reaches for when it
+  // drifts off the contract. It does drift: a long schema contract is the first
+  // thing to slip on a run that has just been through a web-search tool loop,
+  // and the failure was silent because an unrecognised section falls to Info
+  // (see the fallback at the end of tabForSection). A traveler then opens Eat
+  // and Drink on a freshly generated city and finds it empty while every
+  // restaurant sits under Info, which reads as "generation failed" rather than
+  // "one word was wrong".
+  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars',
+    'eat', 'drink', 'drinks', 'food', 'dining', 'cafe', 'cafes', 'bakery', 'bakeries',
+    'brunch', 'nightlife'];
+  var DO_SECTION_IDS = ['activities', 'interests',
+    'do', 'see', 'sights', 'sightseeing', 'attractions', 'tours', 'excursions',
+    'daytrips', 'day-trips', 'museums', 'beaches'];
   // cowork moved here from EAT_SECTION_IDS (owner decision 2026-08-26).
   // A coworking space is a nomad utility, not a meal: filing it under Eat &
   // Drink put "day pass, 1500 ALL, fast wifi" between two dinner cards. A
@@ -986,6 +998,14 @@ var CityOps = (function () {
   // keyword fallback only fires for a section this list has never heard of.
   var INFO_SECTION_IDS = ['base', 'money', 'transport', 'safety', 'practical', 'logistics', 'context', 'corrections'];
   var SERVICE_KEYWORD_RE = /service|laundry|health|beauty|barber|massage/;
+  // Backstops for a section nobody listed. `bar` carries word boundaries on
+  // purpose: without them "barber" reads as a wine bar and a haircut lands
+  // under Eat and Drink. Services is still tested FIRST for the same reason.
+  // `eat` is bounded because "weather notes" contains it, and an unbounded
+  // match filed a reference section under Eat and Drink. The existing
+  // fallback test caught that; the boundaries below are the reason it passes.
+  var EAT_KEYWORD_RE = /\beats?\b|food|dining|restaurant|caf|coffee|bakery|brunch|breakfast|lunch|dinner|dessert|wine|\bbars?\b|\bpubs?\b|\bdrinks?\b/;
+  var DO_KEYWORD_RE = /activit|sight|attraction|excursion|museum|gallery|beach|hike|trail|\btours?\b|entertainment|theat|cinema|concert|day.?trip|things.to.do/;
 
   function tabForSection(sec) {
     if (!sec) return 'info';
@@ -997,7 +1017,12 @@ var CityOps = (function () {
     if (DO_SECTION_IDS.indexOf(id) !== -1) return 'do';
     if (SERVICE_SECTION_IDS.indexOf(id) !== -1) return 'services';
     if (INFO_SECTION_IDS.indexOf(id) !== -1) return 'info';
+    // Keyword backstops, known ids having already won. Services keeps its
+    // first-refusal position: its words (barber, health, beauty) overlap the
+    // eat and do vocabularies more than the other way round.
     if (SERVICE_KEYWORD_RE.test(id) || SERVICE_KEYWORD_RE.test(label)) return 'services';
+    if (EAT_KEYWORD_RE.test(id) || EAT_KEYWORD_RE.test(label)) return 'eat';
+    if (DO_KEYWORD_RE.test(id) || DO_KEYWORD_RE.test(label)) return 'do';
     return 'info'; // fallback bucket: an unrecognized section is reference, not a todo
   }
 

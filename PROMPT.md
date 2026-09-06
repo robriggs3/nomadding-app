@@ -479,10 +479,16 @@ Rules:
 - Return 10 to 18 new items in total, spread across the categories above so no
   single one dominates. Weight the count toward the traveler's interests where
   the city supports it.
-- Put each item in the section it belongs to. Use an existing section id from
-  the list below when the pick fits one (a dinner spot goes in the existing
-  dinner section). Create a new section only for a category the guide does not
-  have yet, with a short lowercase-slug id, a plain label, and one emoji icon.
+- Put each item in the section it belongs to, and use ONLY these section ids:
+  `dinner`, `breakfast`, `lunch`, `coffee`, `cowork`, `activities`, `services`,
+  `practical`, `interests`. These exact ids are what file an item under the
+  right tab in the app. Do NOT invent an id such as `food`, `eat`, `see` or
+  `do`: a section the app does not recognise is filed as reference material,
+  and the traveler opens Eat and Drink to find it empty. Map your picks onto
+  the list: bars and cafes go in `coffee` or `dinner`, sights and day trips go
+  in `activities`, a SIM or a pharmacy goes in `services`.
+- Include a section object in `sections` only for ids the guide does not
+  already have, with a plain label and one emoji icon.
 - Never return an item whose id is already in the list below, and never return
   the same place under a new id. New ids must be short slugs and unique against
   that list.
@@ -500,11 +506,11 @@ Respond with only a JSON code block in this shape, no prose:
 {
   "schema": 1,
   "delta": true,
-  "sections": [{"id": "do", "label": "Do", "icon": "🎯"}],
+  "sections": [{"id": "activities", "label": "Activities", "icon": "🎯"}],
   "items": [
     {
       "id": "new-slug",
-      "section": "do",
+      "section": "activities",
       "status": "plan",
       "name": "Real Place Name",
       "note": "Why it fits, with rating and review count if you have it.",
