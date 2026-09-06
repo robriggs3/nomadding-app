@@ -6227,6 +6227,34 @@ test('the Enrich modal offers one chooser and one row of buttons', () => {
   assert.ok(/interests' && profileEmpty/.test(modal), 'the profile gate moved off the interests pass');
 });
 
+test('a near-miss guide in the top-up box reports the guide errors, not the delta ones', () => {
+  // Rob, 2026-09-06, second time: pasted a generated guide into Enrich and got
+  // "delta must be true" again. The wrong-box detection was there and did not
+  // fire, because the first version only recognised a PERFECT guide. His had a
+  // schema slip, so it fell through to the delta errors, and the app told him
+  // the payload was not a delta, about a payload that was never meant to be
+  // one, while the real problem sat in a check nobody ran.
+  const existing = {
+    schema: 1, city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }], items: []
+  };
+  const broken = {
+    schema: 1, city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [{ id: 'a', section: 'dinner', status: 'maybe', links: [] }]
+  };
+  const r = C.intakeKit.read(JSON.stringify(broken), { mode: 'delta', existing: existing });
+  assert.equal(r.wrongBox, 'city', 'a near-miss guide was not recognised as a guide');
+  // It still routes to the right box...
+  assert.ok(/Update data/.test(r.message));
+  // ...and now says what is actually wrong with it.
+  assert.ok(/needs name/.test(r.message), 'the real guide errors are still hidden');
+  assert.ok(/bad status/.test(r.message));
+  assert.ok(r.errors.length >= 2, 'the errors array is empty on a near-miss guide');
+  // And never the delta grammar, which was only ever true by accident.
+  assert.equal(r.message.indexOf('delta must be true'), -1);
+});
+
 test('a whole guide pasted into the top-up box is named, not graded', () => {
   // Rob, 2026-09-06: ran the full generation prompt, pasted the result into
   // Enrich, and got "delta must be true: this is a partial payload, not a
