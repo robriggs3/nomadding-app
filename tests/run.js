@@ -6198,6 +6198,35 @@ const PROXY_PLAN = () => Promise.resolve({
   transport: 'proxy', url: 'https://x.functions.supabase.co/ai-proxy', headers: {}
 });
 
+test('the Enrich modal offers one chooser and one row of buttons', () => {
+  // Owner ask 2026-09-06: it was four headings, four paragraphs and twelve
+  // buttons, so the paste box and Apply sat below the fold on the surface a
+  // traveler opens most.
+  const fs = require('fs');
+  const path = require('path');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'src', 'app-shell.html'), 'utf8');
+  const start = app.indexOf('function openEnrichModal');
+  const end = app.indexOf('function openAskPlaceModal');
+  assert.ok(start !== -1 && end > start, 'could not isolate the Enrich modal');
+  const modal = app.slice(start, end);
+  // One chooser holding all four passes, not four stacked blocks.
+  ['research', 'interests', 'intel', 'ratings'].forEach(function (k) {
+    assert.ok(modal.indexOf("kind: '" + k + "'") !== -1, k + ' fell out of the chooser');
+  });
+  // The old shape is gone: no per-pass heading, and no repeated button rows.
+  assert.equal(modal.indexOf('enrich-h'), -1, 'the per-pass headings came back');
+  assert.equal(modal.indexOf('promptRow'), -1, 'the per-pass button row came back');
+  // Run with Claude is built before Copy, because it is the action people
+  // want and the other two are the fallback.
+  const run = modal.indexOf("'Run with Claude'");
+  const copy = modal.indexOf("'Copy prompt'");
+  assert.ok(run !== -1 && copy !== -1, 'the action row lost a control');
+  assert.ok(run < copy, 'Copy is offered before Run with Claude');
+  // The interests pass is still the only one that needs a profile, and still
+  // says so rather than offering a control that cannot succeed.
+  assert.ok(/interests' && profileEmpty/.test(modal), 'the profile gate moved off the interests pass');
+});
+
 test('a request that never reached Anthropic does not read as an API error', () => {
   // Standing INBOX watch item since 2026-08-24, earned on 2026-09-06 when Rob
   // hit it on the Research pass with a key that was saved and fine. "Failed to
