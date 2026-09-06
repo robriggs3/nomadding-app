@@ -6198,6 +6198,33 @@ const PROXY_PLAN = () => Promise.resolve({
   transport: 'proxy', url: 'https://x.functions.supabase.co/ai-proxy', headers: {}
 });
 
+test('a request that never reached Anthropic does not read as an API error', () => {
+  // Standing INBOX watch item since 2026-08-24, earned on 2026-09-06 when Rob
+  // hit it on the Research pass with a key that was saved and fine. "Failed to
+  // fetch" is a TypeError from fetch(): nothing left the browser, no status
+  // came back, the key was never read. Printing it verbatim sends somebody to
+  // check a key that is not the problem.
+  ['Failed to fetch',                                  // Chrome
+   'NetworkError when attempting to fetch resource.',  // Firefox
+   'Load failed',                                      // Safari
+   'Network request failed'].forEach(function (m) {
+    const out = C.aiProxyKit.errorText(new Error(m));
+    assert.ok(/never reached Anthropic/.test(out), m + ' still reads as an API error');
+    assert.ok(/not the problem/.test(out), m + ' does not clear the saved key');
+    // Never a dead end: the free path is named in the same breath, as
+    // everywhere else in this app.
+    assert.ok(/Copy prompt|own Claude/.test(out), m + ' does not name the free path');
+    assert.equal(out.indexOf('Claude API error'), -1, m + ' is still labelled an API error');
+  });
+  // A real API error keeps its wording: it IS an API error and the status is
+  // the useful part.
+  const real = C.aiProxyKit.errorText(new Error('Claude API returned 401: invalid x-api-key'));
+  assert.ok(/401/.test(real) && /invalid x-api-key/.test(real));
+  // And a throw with nothing on it still says something actionable.
+  assert.ok(C.aiProxyKit.errorText(new Error('')).length > 20);
+  assert.ok(C.aiProxyKit.errorText(null).length > 20);
+});
+
 test('shouldResume only continues a paused turn, and only so many times', () => {
   assert.equal(C.aiProxyKit.shouldResume('pause_turn', 0), true);
   assert.equal(C.aiProxyKit.shouldResume('pause_turn', C.aiProxyKit.SEARCH_MAX_CONTINUATIONS - 1), true);

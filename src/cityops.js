@@ -5784,6 +5784,30 @@ var CityOps = (function () {
     return 'on ' + entitlementDate(new Date(ms).toISOString());
   }
 
+  // What the app says when the request never arrived at all.
+  //
+  // "Failed to fetch" is a TypeError from fetch(), and it is the one failure
+  // that is NOT an API error: nothing reached Anthropic, no status came back,
+  // and the traveler's key was never even read. Showing it verbatim, which the
+  // app did until 2026-09-06, sends somebody off to check a key that is fine.
+  // Every browser words it differently, hence the three spellings.
+  //
+  // This was a standing watch item on this thread's INBOX from 2026-08-24,
+  // after the first sighting self-resolved: "if it recurs, ship a version that
+  // surfaces the precise failure cause instead of the generic message."
+  function aiErrorText(err) {
+    var msg = (err && err.message) ? String(err.message) : '';
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+      return 'That request never reached Anthropic, so it is not an API error and your saved key ' +
+        'is not the problem. Almost always this is a content blocker or privacy extension ' +
+        'blocking api.anthropic.com, a VPN or network that blocks it, or the connection ' +
+        'dropping. The prompt is unaffected: use Copy prompt and run it in your own Claude, ' +
+        'which needs no key and no direct connection.';
+    }
+    if (!msg) return 'That AI run stopped without saying why. Copy the prompt and run it in your own Claude.';
+    return 'Claude API error: ' + msg;
+  }
+
   // What the app says when the proxy refuses. Never an error, never a dead end:
   // every one of these names the free copy-a-prompt path in the same breath,
   // because that path is right there in the same modal and always has been.
@@ -8612,7 +8636,7 @@ var CityOps = (function () {
       SEARCH_TOOL_TYPE: SEARCH_TOOL_TYPE,
       SEARCH_MAX_USES: SEARCH_MAX_USES,
       SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
-      searchTools: aiSearchTools, searchNote: aiSearchNote,
+      searchTools: aiSearchTools, searchNote: aiSearchNote, errorText: aiErrorText,
       shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
