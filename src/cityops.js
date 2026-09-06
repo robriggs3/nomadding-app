@@ -189,6 +189,62 @@ var CityOps = (function () {
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  // ---- Filling an existing city without emptying it (2026-09-06) ----
+  //
+  // Generating for a city that already exists REPLACES it: commit() clears
+  // dataOverride so the fresh data "wins outright", which also deletes every
+  // place the traveler added by hand, every rename, and every day they had
+  // assigned. That is right for a blank scaffold and wrong for a city somebody
+  // has been living in for four days, and until now it was the only behaviour.
+  //
+  // The safe path already exists one function away: mergeDelta adds what is
+  // new, refuses an id that is already present, and leaves progress alone. All
+  // that was missing is the conversion, because a generated guide is a whole
+  // guide and mergeDelta only speaks delta.
+  //
+  // Pure. The incoming city header is dropped, which is a statement of intent
+  // rather than the protection: mergeDelta clones the CURRENT city and never
+  // reads delta.city, so a header would be ignored even if this passed one
+  // through. Verified, not assumed, after a first version of this comment
+  // claimed the drop was what kept a stay safe. It is not; mergeDelta is.
+  // Dropping it anyway keeps the payload honest about what a top-up is, and
+  // means the guarantee does not quietly depend on a detail of another
+  // function. The header matters here because a re-generation gets it wrong in
+  // exactly this way: Ohrid came back with country NOR and January dates.
+  function guideAsDelta(guide) {
+    var g = guide || {};
+    var out = { schema: 1, delta: true, items: [] };
+    if (Array.isArray(g.sections) && g.sections.length) out.sections = g.sections.slice();
+    if (Array.isArray(g.items)) {
+      out.items = g.items.filter(function (it) {
+        // done and archived are states the traveler reached, never states a
+        // generated guide is entitled to assert about a place it just invented.
+        return it && it.status !== 'done' && it.status !== 'archived';
+      }).map(function (it) {
+        var copy = {};
+        for (var k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) copy[k] = it[k]; }
+        return copy;
+      });
+    }
+    return out;
+  }
+
+  // What the traveler is choosing between, in numbers, before they choose.
+  // `add` is what a merge would bring in; `keep` is what only the merge saves.
+  function fillChoice(current, incoming) {
+    var cur = (current && Array.isArray(current.items)) ? current.items : [];
+    var delta = guideAsDelta(incoming);
+    var curIds = Object.create(null);
+    cur.forEach(function (i) { if (i && i.id) curIds[i.id] = 1; });
+    var incIds = Object.create(null);
+    delta.items.forEach(function (i) { if (i && i.id) incIds[i.id] = 1; });
+    var add = 0;
+    delta.items.forEach(function (i) { if (i && i.id && !curIds[i.id]) add++; });
+    var keep = 0;
+    cur.forEach(function (i) { if (i && i.id && !incIds[i.id]) keep++; });
+    return { add: add, keep: keep, currentItems: cur.length, incomingItems: delta.items.length };
+  }
+
   function mergeDelta(cityData, delta) {
     var errors = [];
     if (!cityData || typeof cityData !== 'object' || Array.isArray(cityData)) {
@@ -8612,7 +8668,7 @@ var CityOps = (function () {
   return {
     STATUSES: STATUSES, slug: slug, cityId: cityId, dayLabel: dayLabel,
     validate: validate, parse: parse, init: init, boot: boot,
-    mergeDelta: mergeDelta,
+    mergeDelta: mergeDelta, guideAsDelta: guideAsDelta, fillChoice: fillChoice,
     appStore: {
       normalize: normalizeAppStore, add: appAddCity,
       remove: appRemoveCity, keepBothName: keepBothName,
