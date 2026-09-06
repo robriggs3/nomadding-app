@@ -6562,6 +6562,62 @@ var CityOps = (function () {
     return AI_MANAGED_TIERS.indexOf(o.tier) === -1 ? 'none' : 'proxy';
   }
 
+  // ---- web search on the traveler's own key (B1) ----
+  //
+  // Until now every in-app run answered out of the model's own training data,
+  // so hours, prices and ratings were RECALLED and the modals had to say so.
+  // Declaring Anthropic's server-side web_search tool makes them CHECKED.
+  //
+  // It is offered on the `direct` transport ONLY, and that is a deliberate
+  // boundary rather than a missing feature. A search costs money in two places
+  // the managed meter cannot presently see: the results are injected as input
+  // tokens, and each search carries a flat per-search fee, while the allowance
+  // counts OUTPUT tokens. On the traveler's own key that is their spend and
+  // their business, exactly as it already is. On our key it would be spend the
+  // meter does not bound, so the proxy keeps answering from memory until the
+  // tier that pays for search exists.
+  var SEARCH_TOOL_TYPE = 'web_search_20260209';
+  // Five, not ten. The server's own tool loop stops at ten iterations and
+  // returns stop_reason "pause_turn"; staying well under it means a normal
+  // research run finishes in one request, and the resume path below is the
+  // exception rather than the rule.
+  var SEARCH_MAX_USES = 5;
+  // A paused turn is resumed by sending the assistant's own content back. This
+  // bounds that: three is far more than a city guide has ever needed, and it is
+  // the difference between a slow answer and an unbounded bill.
+  var SEARCH_MAX_CONTINUATIONS = 3;
+
+  // The `tools` array for a run on this transport, or null for "send no tools",
+  // which is the request shape every run had before this existed.
+  function aiSearchTools(transport) {
+    if (transport !== 'direct') return null;
+    return [{ type: SEARCH_TOOL_TYPE, name: 'web_search', max_uses: SEARCH_MAX_USES }];
+  }
+
+  // The one sentence the modals show about where the answer came from. It is
+  // the honest difference between the transports, and the traveler cannot see
+  // it any other way.
+  function aiSearchNote(transport) {
+    if (transport === 'direct') {
+      return 'Run with Claude searches the web on your own key, so hours, prices and ratings are ' +
+        'checked rather than recalled. Up to ' + SEARCH_MAX_USES + ' searches per run, billed to your key.';
+    }
+    if (transport === 'proxy') {
+      return 'Run with Claude answers from the model\'s own knowledge: it has no web access on this ' +
+        'plan, so hours, prices and ratings are recalled, not checked. Copy prompt into Claude.ai or ' +
+        'ChatGPT if you want it to search the web first.';
+    }
+    return 'Copy the prompt into Claude.ai or ChatGPT, which can search the web before it answers.';
+  }
+
+  // Whether a stopped turn should be sent back to be continued. `pause_turn` is
+  // the server saying "I was still working"; anything else is a finished turn,
+  // and a run that has already been resumed too many times is stopped on
+  // purpose rather than left to spend.
+  function aiShouldResume(stopReason, continuations) {
+    return stopReason === 'pause_turn' && (continuations || 0) < SEARCH_MAX_CONTINUATIONS;
+  }
+
   // The function's URL, derived from the project URL the app already holds, so
   // there is no fourth place to keep a hostname in step.
   function aiProxyUrl(supaUrl) {
@@ -9437,6 +9493,14 @@ var CityOps = (function () {
       MANAGED_TIERS: AI_MANAGED_TIERS,
       transport: aiTransport, url: aiProxyUrl,
       meter: aiMeter, pauseMessage: aiPauseMessage, guides: aiGuides,
+      // Web search, own-key only (B1). The boundary is explained at
+      // aiSearchTools: search costs land in input tokens and a per-search fee,
+      // neither of which the output-token allowance can see.
+      SEARCH_TOOL_TYPE: SEARCH_TOOL_TYPE,
+      SEARCH_MAX_USES: SEARCH_MAX_USES,
+      SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
+      searchTools: aiSearchTools, searchNote: aiSearchNote,
+      shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
       mock: aiUsageMock
@@ -15938,6 +16002,62 @@ var CityOps = (function () {
     return AI_MANAGED_TIERS.indexOf(o.tier) === -1 ? 'none' : 'proxy';
   }
 
+  // ---- web search on the traveler's own key (B1) ----
+  //
+  // Until now every in-app run answered out of the model's own training data,
+  // so hours, prices and ratings were RECALLED and the modals had to say so.
+  // Declaring Anthropic's server-side web_search tool makes them CHECKED.
+  //
+  // It is offered on the `direct` transport ONLY, and that is a deliberate
+  // boundary rather than a missing feature. A search costs money in two places
+  // the managed meter cannot presently see: the results are injected as input
+  // tokens, and each search carries a flat per-search fee, while the allowance
+  // counts OUTPUT tokens. On the traveler's own key that is their spend and
+  // their business, exactly as it already is. On our key it would be spend the
+  // meter does not bound, so the proxy keeps answering from memory until the
+  // tier that pays for search exists.
+  var SEARCH_TOOL_TYPE = 'web_search_20260209';
+  // Five, not ten. The server's own tool loop stops at ten iterations and
+  // returns stop_reason "pause_turn"; staying well under it means a normal
+  // research run finishes in one request, and the resume path below is the
+  // exception rather than the rule.
+  var SEARCH_MAX_USES = 5;
+  // A paused turn is resumed by sending the assistant's own content back. This
+  // bounds that: three is far more than a city guide has ever needed, and it is
+  // the difference between a slow answer and an unbounded bill.
+  var SEARCH_MAX_CONTINUATIONS = 3;
+
+  // The `tools` array for a run on this transport, or null for "send no tools",
+  // which is the request shape every run had before this existed.
+  function aiSearchTools(transport) {
+    if (transport !== 'direct') return null;
+    return [{ type: SEARCH_TOOL_TYPE, name: 'web_search', max_uses: SEARCH_MAX_USES }];
+  }
+
+  // The one sentence the modals show about where the answer came from. It is
+  // the honest difference between the transports, and the traveler cannot see
+  // it any other way.
+  function aiSearchNote(transport) {
+    if (transport === 'direct') {
+      return 'Run with Claude searches the web on your own key, so hours, prices and ratings are ' +
+        'checked rather than recalled. Up to ' + SEARCH_MAX_USES + ' searches per run, billed to your key.';
+    }
+    if (transport === 'proxy') {
+      return 'Run with Claude answers from the model\'s own knowledge: it has no web access on this ' +
+        'plan, so hours, prices and ratings are recalled, not checked. Copy prompt into Claude.ai or ' +
+        'ChatGPT if you want it to search the web first.';
+    }
+    return 'Copy the prompt into Claude.ai or ChatGPT, which can search the web before it answers.';
+  }
+
+  // Whether a stopped turn should be sent back to be continued. `pause_turn` is
+  // the server saying "I was still working"; anything else is a finished turn,
+  // and a run that has already been resumed too many times is stopped on
+  // purpose rather than left to spend.
+  function aiShouldResume(stopReason, continuations) {
+    return stopReason === 'pause_turn' && (continuations || 0) < SEARCH_MAX_CONTINUATIONS;
+  }
+
   // The function's URL, derived from the project URL the app already holds, so
   // there is no fourth place to keep a hostname in step.
   function aiProxyUrl(supaUrl) {
@@ -18813,6 +18933,14 @@ var CityOps = (function () {
       MANAGED_TIERS: AI_MANAGED_TIERS,
       transport: aiTransport, url: aiProxyUrl,
       meter: aiMeter, pauseMessage: aiPauseMessage, guides: aiGuides,
+      // Web search, own-key only (B1). The boundary is explained at
+      // aiSearchTools: search costs land in input tokens and a per-search fee,
+      // neither of which the output-token allowance can see.
+      SEARCH_TOOL_TYPE: SEARCH_TOOL_TYPE,
+      SEARCH_MAX_USES: SEARCH_MAX_USES,
+      SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
+      searchTools: aiSearchTools, searchNote: aiSearchNote,
+      shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
       mock: aiUsageMock
@@ -21506,9 +21634,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     // The sentence that used to close this modal, "In-app research is planned
     // for a future version", stopped being true when Run with Claude shipped;
     // it sat directly beneath three working ones. Removed 2026-09-01.
-    m.box.appendChild(el('p', 'diff', 'Run with Claude answers from the model\'s own knowledge: ' +
-      'it has no web access, so hours, prices and ratings are recalled, not checked. ' +
-      'Copy prompt into Claude.ai or ChatGPT if you want it to search the web first.'));
+    // Which it is depends on whose key the run goes on, so the sentence is
+    // built from the transport rather than hardcoded. Own key searches the web;
+    // our key still answers from memory until the tier that pays for search
+    // exists. Saying the wrong one would be the app lying about its own
+    // freshness, which is the whole point of the line.
+    m.box.appendChild(el('p', 'diff', CityOps.aiProxyKit.searchNote(aiTransportNow())));
   }
 
   // ---- Ask Claude about ONE place ----
@@ -21759,6 +21890,7 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     var t = aiTransportNow();
     if (t === 'direct') {
       return Promise.resolve({
+        transport: t,
         url: 'https://api.anthropic.com/v1/messages',
         headers: {
           'x-api-key': apiKey,
@@ -21775,6 +21907,7 @@ only judges it. `ratings` may be omitted when you could not verify the place;
           'again from Profile, or copy the prompt below into your own chat.' };
       }
       return {
+        transport: t,
         url: CityOps.aiProxyKit.url(SUPA.url),
         headers: {
           'Authorization': 'Bearer ' + tok,
@@ -21829,94 +21962,180 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // caller distinguishes from a real failure) and stops the read loop, so a
   // cancelled generation costs nothing further. Omitted by every caller that
   // has no cancel control, and by the unit tests' mocked fetch.
+  // Streams one run and returns its text. Two transports, and since B1 one
+  // optional server-side tool: web search, declared only on the traveler's own
+  // key (the boundary is argued at CityOps.aiProxyKit.searchTools).
+  //
+  // A run that searches can come back stop_reason "pause_turn", which is the
+  // server saying it hit its own tool-loop limit mid-thought. That is resumed by
+  // sending the assistant's own content straight back, so the parser below now
+  // rebuilds the content blocks as they stream, not just the text. Nothing about
+  // the no-tools path changed: with no tools declared there is no pause_turn,
+  // the blocks are rebuilt and thrown away, and the bytes on the wire are what
+  // they always were.
   function callClaudeStream(prompt, apiKey, onProgress, signal) {
     // The one-tap path is what a plan buys. The copy-a-prompt path in the
     // same modal is free, is unaffected, and is named in the message.
     if (!entAllows()) return Promise.reject(new Error(entGateText('ai')));
+    var searches = 0;
+
     return aiRequestPlan(apiKey).then(function (plan) {
       // Neither transport is available. The modal that called this already
       // offers the free copy-a-prompt path; this says which one is missing.
       if (plan.message) throw new Error(plan.message);
-      // ONE body, whichever transport carries it. The proxy forwards this shape
-      // to Anthropic unchanged and streams the reply back byte for byte, which
-      // is why the parser below did not have to learn anything new.
-      return fetch(plan.url, {
-        method: 'POST',
-        signal: signal || undefined,
-        headers: plan.headers,
-        body: JSON.stringify({
+      // Web search follows the transport, and the plan is what decided the
+      // transport, so it is read from there rather than asked a second time.
+      // A plan that names no transport declares no tools, which is the request
+      // this app made before B1 existed.
+      var tools = CityOps.aiProxyKit.searchTools(plan.transport);
+
+      function runOnce(messages, continuations, textSoFar) {
+        // ONE body, whichever transport carries it. The proxy forwards this
+        // shape to Anthropic unchanged and streams the reply back byte for
+        // byte, which is why the parser did not have to learn a second dialect.
+        var body = {
           model: CLAUDE_MODEL,
           max_tokens: CLAUDE_MAX_TOKENS,
           thinking: { type: 'adaptive' },
           stream: true,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      });
-    }).then(function (resp) {
-      if (!resp.ok || !resp.body) {
-        return resp.text().catch(function () { return ''; }).then(function (bodyText) {
-          var j = null;
-          try { j = JSON.parse(bodyText); } catch (e) { /* not JSON; shown raw, trimmed */ }
-          // Our own proxy answers a refusal with a REASON, and a refusal is not
-          // a failure: it is the allowance doing what it was built to do. Said
-          // in the app's own words, naming the free path and the reset date,
-          // never as "Claude API returned 429".
-          if (j && j.error && j.error.reason) {
-            throw new Error(CityOps.aiProxyKit.pauseMessage(j.error.reason, j.error));
-          }
-          var detail = (j && j.error && j.error.message) ? j.error.message : bodyText;
-          throw new Error('Claude API returned ' + resp.status +
-            (detail ? ': ' + String(detail).slice(0, 300) : ''));
-        });
-      }
-      var reader = resp.body.getReader();
-      var decoder = new TextDecoder();
-      var buf = '';
-      var finalText = '';
-      var thinkingChars = 0;
+          messages: messages
+        };
+        // Omitted entirely rather than sent empty: a request with no tools is
+        // the request this app has always made.
+        if (tools) body.tools = tools;
 
-      // One SSE event is "event: ...\ndata: {...}" (possibly several data:
-      // lines, though Anthropic's stream sends one); only the JSON payload on
-      // the data: line matters here.
-      function handleEvent(rawEvent) {
-        var data = null;
-        rawEvent.split('\n').forEach(function (l) {
-          if (l.indexOf('data:') === 0) data = l.slice(5).replace(/^\s+/, '');
-        });
-        if (!data) return;
-        var payload;
-        try { payload = JSON.parse(data); } catch (e) { return; }
-        if (payload.type === 'error') {
-          throw new Error((payload.error && payload.error.message) || 'Claude API stream error');
-        }
-        if (payload.type === 'content_block_delta' && payload.delta) {
-          if (payload.delta.type === 'text_delta') {
-            finalText += payload.delta.text;
-            if (onProgress) onProgress({ kind: 'text', totalChars: finalText.length });
-          } else if (payload.delta.type === 'thinking_delta') {
-            thinkingChars += (payload.delta.thinking || '').length;
-            if (onProgress) onProgress({ kind: 'thinking', totalChars: thinkingChars });
+        return fetch(plan.url, {
+          method: 'POST',
+          signal: signal || undefined,
+          headers: plan.headers,
+          body: JSON.stringify(body)
+        }).then(function (resp) {
+          if (!resp.ok || !resp.body) {
+            return resp.text().catch(function () { return ''; }).then(function (bodyText) {
+              var j = null;
+              try { j = JSON.parse(bodyText); } catch (e) { /* not JSON; shown raw, trimmed */ }
+              // Our own proxy answers a refusal with a REASON, and a refusal is
+              // not a failure: it is the allowance doing what it was built to
+              // do. Said in the app's own words, naming the free path and the
+              // reset date, never as "Claude API returned 429".
+              if (j && j.error && j.error.reason) {
+                throw new Error(CityOps.aiProxyKit.pauseMessage(j.error.reason, j.error));
+              }
+              var detail = (j && j.error && j.error.message) ? j.error.message : bodyText;
+              throw new Error('Claude API returned ' + resp.status +
+                (detail ? ': ' + String(detail).slice(0, 300) : ''));
+            });
           }
-        }
+          var reader = resp.body.getReader();
+          var decoder = new TextDecoder();
+          var buf = '';
+          var finalText = textSoFar || '';
+          var thinkingChars = 0;
+          // The assistant turn as it arrives, rebuilt block by block so a
+          // paused turn can be handed back verbatim. Index-keyed because the
+          // stream addresses blocks by index, not in order of completion.
+          var blocks = [];
+          var partialJson = {};
+          var stopReason = null;
+
+          function finishBlock(i) {
+            var b = blocks[i];
+            if (!b) return;
+            // server_tool_use input arrives as a partial JSON string. An
+            // unparseable one is left as the empty object it started as rather
+            // than throwing: a malformed block should cost this resume, not the
+            // whole run.
+            if (typeof partialJson[i] === 'string' && partialJson[i]) {
+              try { b.input = JSON.parse(partialJson[i]); } catch (e) { /* keep {} */ }
+            }
+            partialJson[i] = null;
+          }
+
+          // One SSE event is "event: ...\ndata: {...}" (possibly several data:
+          // lines, though Anthropic's stream sends one); only the JSON payload
+          // on the data: line matters here.
+          function handleEvent(rawEvent) {
+            var data = null;
+            rawEvent.split('\n').forEach(function (l) {
+              if (l.indexOf('data:') === 0) data = l.slice(5).replace(/^\s+/, '');
+            });
+            if (!data) return;
+            var payload;
+            try { payload = JSON.parse(data); } catch (e) { return; }
+            if (payload.type === 'error') {
+              throw new Error((payload.error && payload.error.message) || 'Claude API stream error');
+            }
+            if (payload.type === 'content_block_start') {
+              var cb = payload.content_block || {};
+              // Cloned, because the block is mutated by the deltas that follow
+              // and the payload object is not ours to keep.
+              blocks[payload.index] = JSON.parse(JSON.stringify(cb));
+              partialJson[payload.index] = '';
+              // The only progress signal a search run gives: the traveler needs
+              // to know the wait is a lookup, not a hang.
+              if (cb.type === 'server_tool_use') {
+                searches += 1;
+                if (onProgress) onProgress({ kind: 'searching', searches: searches, totalChars: finalText.length });
+              }
+              return;
+            }
+            if (payload.type === 'content_block_stop') { finishBlock(payload.index); return; }
+            if (payload.type === 'message_delta' && payload.delta && payload.delta.stop_reason) {
+              stopReason = payload.delta.stop_reason;
+              return;
+            }
+            if (payload.type === 'content_block_delta' && payload.delta) {
+              var blk = blocks[payload.index];
+              if (payload.delta.type === 'text_delta') {
+                finalText += payload.delta.text;
+                if (blk) blk.text = (blk.text || '') + payload.delta.text;
+                if (onProgress) onProgress({ kind: 'text', totalChars: finalText.length });
+              } else if (payload.delta.type === 'thinking_delta') {
+                thinkingChars += (payload.delta.thinking || '').length;
+                if (blk) blk.thinking = (blk.thinking || '') + (payload.delta.thinking || '');
+                if (onProgress) onProgress({ kind: 'thinking', totalChars: thinkingChars });
+              } else if (payload.delta.type === 'signature_delta') {
+                // Thinking blocks are only valid on a resume with their
+                // signature attached.
+                if (blk) blk.signature = payload.delta.signature;
+              } else if (payload.delta.type === 'input_json_delta') {
+                partialJson[payload.index] = (partialJson[payload.index] || '') +
+                  (payload.delta.partial_json || '');
+              }
+            }
+          }
+
+          function pump() {
+            return reader.read().then(function (r) {
+              if (r.done) {
+                if (buf.trim()) handleEvent(buf); // a final event with no trailing blank line
+                return { text: finalText, stop: stopReason, blocks: blocks };
+              }
+              buf += decoder.decode(r.value, { stream: true });
+              var idx;
+              while ((idx = buf.indexOf('\n\n')) !== -1) {
+                var rawEvent = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                if (rawEvent.trim()) handleEvent(rawEvent);
+              }
+              return pump();
+            });
+          }
+
+          return pump().then(function (out) {
+            if (!CityOps.aiProxyKit.shouldResume(out.stop, continuations)) return out.text;
+            // Resumed by handing the assistant's own turn straight back. No
+            // "continue" message is added on purpose: the server reads the
+            // trailing server_tool_use block and picks up where it stopped.
+            var content = out.blocks.filter(function (b) { return b; });
+            if (!content.length) return out.text;
+            return runOnce(messages.concat([{ role: 'assistant', content: content }]),
+              (continuations || 0) + 1, out.text);
+          });
+        });
       }
 
-      function pump() {
-        return reader.read().then(function (r) {
-          if (r.done) {
-            if (buf.trim()) handleEvent(buf); // a final event with no trailing blank line
-            return finalText;
-          }
-          buf += decoder.decode(r.value, { stream: true });
-          var idx;
-          while ((idx = buf.indexOf('\n\n')) !== -1) {
-            var rawEvent = buf.slice(0, idx);
-            buf = buf.slice(idx + 2);
-            if (rawEvent.trim()) handleEvent(rawEvent);
-          }
-          return pump();
-        });
-      }
-      return pump();
+      return runOnce([{ role: 'user', content: prompt }], 0, '');
     });
   }
 
@@ -22225,11 +22444,14 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       // to 90 places across eight sections, each with hours, prices and a
       // map link), so this is minutes, not seconds; a progress line that says
       // "Starting..." and then sits there is how a working run gets killed.
-      // "Researching" is the honest word for what this is only up to a point:
-      // the call declares no web-search tool, so Claude is writing the guide
-      // out of what it already knows, not looking the city up. Say so here
-      // rather than let a 3-minute progress bar imply otherwise.
-      genMsg.textContent = 'Claude is writing ' + cityName + ' from its own knowledge, with no web access... this usually takes 2 to 4 minutes.';
+      // "Researching" became the honest word on the own-key path in B1, where
+      // the call declares web search and Claude really does look the city up.
+      // On our key it still writes from what it already knows, and the line has
+      // to keep saying so rather than let a 3-minute progress bar imply
+      // otherwise. One sentence, chosen by transport, same as the Enrich note.
+      genMsg.textContent = (aiTransportNow() === 'direct')
+        ? 'Claude is researching ' + cityName + ' on the web with your key... this usually takes 2 to 4 minutes.'
+        : 'Claude is writing ' + cityName + ' from its own knowledge, with no web access... this usually takes 2 to 4 minutes.';
       genAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       callClaudeStream(prompt, key, function (p) {
         genMsg.textContent = 'Claude is writing ' + cityName + ' from its own knowledge... ' +

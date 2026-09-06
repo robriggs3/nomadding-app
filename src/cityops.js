@@ -5515,6 +5515,62 @@ var CityOps = (function () {
     return AI_MANAGED_TIERS.indexOf(o.tier) === -1 ? 'none' : 'proxy';
   }
 
+  // ---- web search on the traveler's own key (B1) ----
+  //
+  // Until now every in-app run answered out of the model's own training data,
+  // so hours, prices and ratings were RECALLED and the modals had to say so.
+  // Declaring Anthropic's server-side web_search tool makes them CHECKED.
+  //
+  // It is offered on the `direct` transport ONLY, and that is a deliberate
+  // boundary rather than a missing feature. A search costs money in two places
+  // the managed meter cannot presently see: the results are injected as input
+  // tokens, and each search carries a flat per-search fee, while the allowance
+  // counts OUTPUT tokens. On the traveler's own key that is their spend and
+  // their business, exactly as it already is. On our key it would be spend the
+  // meter does not bound, so the proxy keeps answering from memory until the
+  // tier that pays for search exists.
+  var SEARCH_TOOL_TYPE = 'web_search_20260209';
+  // Five, not ten. The server's own tool loop stops at ten iterations and
+  // returns stop_reason "pause_turn"; staying well under it means a normal
+  // research run finishes in one request, and the resume path below is the
+  // exception rather than the rule.
+  var SEARCH_MAX_USES = 5;
+  // A paused turn is resumed by sending the assistant's own content back. This
+  // bounds that: three is far more than a city guide has ever needed, and it is
+  // the difference between a slow answer and an unbounded bill.
+  var SEARCH_MAX_CONTINUATIONS = 3;
+
+  // The `tools` array for a run on this transport, or null for "send no tools",
+  // which is the request shape every run had before this existed.
+  function aiSearchTools(transport) {
+    if (transport !== 'direct') return null;
+    return [{ type: SEARCH_TOOL_TYPE, name: 'web_search', max_uses: SEARCH_MAX_USES }];
+  }
+
+  // The one sentence the modals show about where the answer came from. It is
+  // the honest difference between the transports, and the traveler cannot see
+  // it any other way.
+  function aiSearchNote(transport) {
+    if (transport === 'direct') {
+      return 'Run with Claude searches the web on your own key, so hours, prices and ratings are ' +
+        'checked rather than recalled. Up to ' + SEARCH_MAX_USES + ' searches per run, billed to your key.';
+    }
+    if (transport === 'proxy') {
+      return 'Run with Claude answers from the model\'s own knowledge: it has no web access on this ' +
+        'plan, so hours, prices and ratings are recalled, not checked. Copy prompt into Claude.ai or ' +
+        'ChatGPT if you want it to search the web first.';
+    }
+    return 'Copy the prompt into Claude.ai or ChatGPT, which can search the web before it answers.';
+  }
+
+  // Whether a stopped turn should be sent back to be continued. `pause_turn` is
+  // the server saying "I was still working"; anything else is a finished turn,
+  // and a run that has already been resumed too many times is stopped on
+  // purpose rather than left to spend.
+  function aiShouldResume(stopReason, continuations) {
+    return stopReason === 'pause_turn' && (continuations || 0) < SEARCH_MAX_CONTINUATIONS;
+  }
+
   // The function's URL, derived from the project URL the app already holds, so
   // there is no fourth place to keep a hostname in step.
   function aiProxyUrl(supaUrl) {
@@ -8390,6 +8446,14 @@ var CityOps = (function () {
       MANAGED_TIERS: AI_MANAGED_TIERS,
       transport: aiTransport, url: aiProxyUrl,
       meter: aiMeter, pauseMessage: aiPauseMessage, guides: aiGuides,
+      // Web search, own-key only (B1). The boundary is explained at
+      // aiSearchTools: search costs land in input tokens and a per-search fee,
+      // neither of which the output-token allowance can see.
+      SEARCH_TOOL_TYPE: SEARCH_TOOL_TYPE,
+      SEARCH_MAX_USES: SEARCH_MAX_USES,
+      SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
+      searchTools: aiSearchTools, searchNote: aiSearchNote,
+      shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
       mock: aiUsageMock
