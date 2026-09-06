@@ -369,6 +369,73 @@ test('joining a displayed date joins its visible group', () => {
   const mon = vm[0].days.find(d => d.iso === '2026-08-10');
   assert.deepEqual(mon.items.map(i => i.id), ['brasserie', 'sisters']);
 });
+test('a day can carry a note about its own shape', () => {
+  // Rob, 2026-09-06: "this is an hour away, so block off your morning and
+  // shift your work schedule to evening". Half of that is a fact about a
+  // place and belongs on the item. The other half is a fact about the DAY and
+  // had nowhere to live, so it was being crammed into whichever pick happened
+  // to sit first, where it rotted the moment the day was re-sorted.
+  const guide = clone(GOOD);
+  guide.dayNotes = { '2026-08-13': 'Boat leaves 10:15 and takes seven hours, so work moves to the evening.' };
+  assert.deepEqual(C.validate(guide), [], 'dayNotes is not accepted by the schema');
+
+  const st = C.emptyState();
+  assert.equal(C.effectiveDayNote(guide, st, '2026-08-13'),
+    'Boat leaves 10:15 and takes seven hours, so work moves to the evening.');
+  // A day without one renders nothing, which is what keeps this invisible on
+  // the days it has nothing to say about.
+  assert.equal(C.effectiveDayNote(guide, st, '2026-08-14'), '');
+
+  // The guide proposes, the traveler decides, exactly like a day assignment.
+  C.setDayNote(st, '2026-08-13', 'Actually going Thursday');
+  assert.equal(C.effectiveDayNote(guide, st, '2026-08-13'), 'Actually going Thursday');
+  // An empty string is a real value: deliberately cleared, and the guide's
+  // version must NOT come back.
+  C.setDayNote(st, '2026-08-13', '');
+  assert.equal(C.effectiveDayNote(guide, st, '2026-08-13'), '',
+    "a cleared note fell back to the guide's version");
+  // null is the different intent: forget my override.
+  C.setDayNote(st, '2026-08-13', null);
+  assert.ok(C.effectiveDayNote(guide, st, '2026-08-13').indexOf('Boat leaves') === 0);
+
+  // Keys are dates, so a note cannot drift onto the wrong day when a stay is
+  // re-dated, and the schema says so.
+  assert.throws(() => C.setDayNote(st, 'tuesday', 'x'), /bad day/);
+  const bad = clone(GOOD); bad.dayNotes = { tuesday: 'x' };
+  assert.ok(C.validate(bad).join(' ').indexOf('YYYY-MM-DD') !== -1);
+  const notText = clone(GOOD); notText.dayNotes = { '2026-08-13': 42 };
+  assert.ok(C.validate(notText).join(' ').indexOf('must be text') !== -1);
+
+  // An old state, written before this existed, reads as "no notes" rather
+  // than throwing.
+  const older = C.appStore ? {} : {};
+  assert.equal(C.effectiveDayNote(guide, {}, '2026-08-13').indexOf('Boat leaves'), 0);
+});
+
+test('a top-up adds day notes where there is a gap and never over one', () => {
+  const guide = clone(GOOD);
+  guide.dayNotes = { '2026-08-13': 'Already said this about Thursday.' };
+  const delta = {
+    schema: 1, delta: true, items: [],
+    dayNotes: {
+      '2026-08-13': 'A re-run changed its mind about Thursday.',
+      '2026-08-14': 'Everything here is shut on Sunday.',
+      'nonsense': 'ignored'
+    }
+  };
+  const res = C.mergeDelta(guide, delta);
+  assert.deepEqual(res.errors, []);
+  // The gap is filled...
+  assert.equal(res.data.dayNotes['2026-08-14'], 'Everything here is shut on Sunday.');
+  assert.equal(res.summary.dayNotesAdded, 1);
+  // ...and the existing one is left exactly alone, for the same reason a
+  // top-up may not re-add a place it already has.
+  assert.equal(res.data.dayNotes['2026-08-13'], 'Already said this about Thursday.');
+  assert.equal(res.summary.dayNotesSkipped, 1);
+  // A malformed key is dropped rather than merged or thrown.
+  assert.equal(res.data.dayNotes.nonsense, undefined);
+});
+
 test('calendarModel merges sections by displayed date with empty fill', () => {
   const st = C.emptyState();
   C.setStatus(st, 'nord', 'plan');
@@ -1320,7 +1387,7 @@ const DELTA = {
 test('mergeDelta adds new items and new sections and counts them', () => {
   const r = C.mergeDelta(GOOD, clone(DELTA));
   assert.deepEqual(r.errors, []);
-  assert.deepEqual(r.summary, { added: 2, skipped: 0, sectionsAdded: 1, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+  assert.deepEqual(r.summary, { added: 2, skipped: 0, sectionsAdded: 1, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.equal(r.data.sections.length, 3);
   assert.equal(r.data.sections[2].id, 'interests');   // appended, never reordered
   assert.equal(r.data.items.length, GOOD.items.length + 2);
@@ -1350,7 +1417,7 @@ test('mergeDelta applied twice is a no-op: everything is already there', () => {
   const second = C.mergeDelta(first.data, clone(DELTA));
   assert.deepEqual(second.errors, []);
   assert.deepEqual(second.summary,
-    { added: 0, skipped: 2, sectionsAdded: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, skipped: 2, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.deepEqual(second.data, first.data);
 });
 
@@ -1446,7 +1513,7 @@ test('mergeDelta rejects a bad envelope, unknown section, done status and bad in
   assert.equal(bad({ sections: 'nope' }).data, null);
   // A rejected delta reports a zeroed summary: nothing partial ever happened.
   assert.deepEqual(bad({ schema: 2 }).summary,
-    { added: 0, skipped: 0, sectionsAdded: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 
 test('mergeDelta applies intel to existing ids and counts unknown ids as skipped', () => {
@@ -2819,7 +2886,7 @@ test('mergeDelta ratings map is prototype-safe and rejects bad shapes', () => {
   assert.equal(badEntry.data, null);
   assert.ok(badEntry.errors.some((e) => /ratings\["nord"\]: stars must be a number from 0 to 5/.test(e)));
   // Errors mean NO merge at all, ratings included.
-  assert.deepEqual(badEntry.summary, { added: 0, skipped: 0, sectionsAdded: 0, intelApplied: 0,
+  assert.deepEqual(badEntry.summary, { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0,
     intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 

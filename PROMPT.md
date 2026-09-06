@@ -251,6 +251,14 @@ block, nothing outside the fence. The JSON must be valid against schema v1
 - `status` on every generated item is either `"plan"` or `"backup"` only.
   Never emit `"done"` or `"archived"`: those are states the traveler sets
   later, in the app.
+- `dayNotes` is optional, an object keyed by ISO date: `{"2026-09-09": "..."}`.
+  ONE short line about the shape of that day, and only for a day that has one.
+  This is where a fact about the DAY goes, as opposed to a fact about a place:
+  "the boat leaves at 10:15 and takes seven hours, so this is the day to move
+  work to the evening", or "everything here is shut on Sunday". Do not write
+  one for every day, do not repeat what an item's own note already says, and
+  do not use it for a list of the day's picks: the app already shows those
+  underneath it. Most stays need two or three of these at most.
 - `day`, when present, is an ISO date (`YYYY-MM-DD`) that falls inside the
   stay range (`city.dates.from` to `city.dates.to` inclusive). Backups and
   anytime items omit `day` entirely rather than guessing one.
@@ -509,6 +517,9 @@ Rules:
   link, no invented URLs, prices in local currency and USD, `place_id` and
   `verified` both null, `status` either `plan` or `backup`, `day` only when the
   pick only works on a specific date inside the stay.
+- You may add `dayNotes` for a day whose SHAPE changes because of a pick you
+  are adding: an all-day trip, or a day something is closed. One line, only
+  where it is true, and never a restatement of the picks themselves.
 - End each `note` with one short clause saying where the place sits: how far
   from the accommodation, the centre, or a named pick already in this guide,
   in walking minutes or metres. State it as a fact about the PLACE ("200m
