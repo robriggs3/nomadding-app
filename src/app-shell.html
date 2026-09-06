@@ -3075,10 +3075,55 @@
         });
       }
       if (isEdit && CityOps.cityId(data) === editCityId) {
+        // A city somebody has been living in is not a scaffold. Replacing it
+        // clears dataOverride, which takes every hand-added place, rename and
+        // day assignment with it, and until now that was the only behaviour
+        // this path had. Offer the additive one FIRST, and only when there is
+        // actually something to lose: a blank or untouched city replaces
+        // silently, exactly as before.
+        var st0 = CityOps.liveState() || CityOps.makeStore(editCityId, LS).load();
+        var current = CityOps.effectiveData(store.cities[editCityId], st0);
+        var choice = CityOps.fillChoice(current, data);
+        if (choice.keep > 0) {
+          askFillOrReplace(data, choice, keepOpen, afterCommit);
+          return;
+        }
         commit(data, true, keepOpen, afterCommit);
       } else {
         handleParsed(data, keepOpen, afterCommit);
       }
+    }
+
+    // Two buttons and a sentence with the numbers in it. Add is offered first
+    // and is the one that cannot lose anything; Replace keeps its old
+    // behaviour and now has to say what it costs.
+    function askFillOrReplace(data, choice, keepOpen, afterCommit) {
+      bmsg.textContent = 'This city already has ' + choice.currentItems + ' ' +
+        (choice.currentItems === 1 ? 'place' : 'places') + ', ' + choice.keep +
+        ' of which ' + (choice.keep === 1 ? 'is' : 'are') +
+        ' not in what you just generated (places you added, or picks it dropped). ' +
+        'Add brings in the ' + choice.add + ' new ' + (choice.add === 1 ? 'one' : 'ones') +
+        ' and keeps everything else. Replace throws the ' + choice.keep + ' away.';
+      var row = el('div', 'mrow');
+      var addBtn = el('button', 'ctl to-done', 'Add ' + choice.add + ' new, keep the rest');
+      addBtn.type = 'button';
+      addBtn.onclick = function () {
+        var st = CityOps.makeStore(editCityId, LS).load();
+        var cur = CityOps.effectiveData(store.cities[editCityId], st);
+        var res = CityOps.mergeDelta(cur, CityOps.guideAsDelta(data));
+        if (!res.data) { bmsg.textContent = 'Nothing was added:\n' + res.errors.join('\n'); return; }
+        row.remove();
+        commit(res.data, true, keepOpen, afterCommit);
+        bmsg.textContent = 'Added ' + res.summary.added + ', kept ' + choice.keep + '.';
+      };
+      var repBtn = el('button', 'ctl', 'Replace, losing ' + choice.keep);
+      repBtn.type = 'button';
+      repBtn.onclick = function () { row.remove(); commit(data, true, keepOpen, afterCommit); };
+      var cancelBtn = el('button', 'ctl to-archived', 'Cancel');
+      cancelBtn.type = 'button';
+      cancelBtn.onclick = function () { row.remove(); bmsg.textContent = ''; };
+      row.appendChild(addBtn); row.appendChild(repBtn); row.appendChild(cancelBtn);
+      bmsg.parentNode.insertBefore(row, bmsg.nextSibling);
     }
 
     bcreate.onclick = function () {
