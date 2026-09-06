@@ -21902,87 +21902,95 @@ only judges it. `ratings` may be omitted when you could not verify the place;
         msg.textContent = CityOps.aiProxyKit.errorText(e);
       });
     }
-    // `noun` names the pass on its own button. The three blocks used to carry
-    // three identical "Copy prompt" buttons, so on a phone (where the heading
-    // that told them apart has usually scrolled off) picking the ratings pass
-    // meant counting rows. Each button now says which prompt it copies.
-    function promptRow(kind, filename, disabledReason, noun) {
-      var row = el('div', 'mrow');
-      var copy = el('button', 'ctl', 'Copy ' + noun + ' prompt');
-      copy.type = 'button';
-      var dl = el('button', 'ctl', 'Download .md');
-      dl.type = 'button';
-      if (disabledReason) {
-        // Never offer a control that cannot succeed: disable it and say why.
-        copy.disabled = dl.disabled = true;
-        copy.title = dl.title = disabledReason;
-      } else {
-        copy.onclick = function () { var t = build(kind); if (t !== null) copyOut(t); };
-        dl.onclick = function () { var t = build(kind); if (t !== null) downloadOut(t, filename); };
-      }
-      row.appendChild(copy);
-      row.appendChild(dl);
+    var profileEmpty = CityOps.profile.isEmpty(store.profile);
+
+    // ---- one chooser, one description, one row of buttons (2026-09-06) ----
+    // This was four headings, four paragraphs and twelve buttons stacked down
+    // the sheet, so the paste box and Apply sat three scrolls below the fold on
+    // the surface a traveler opens most. Owner ask: tighten it.
+    //
+    // The chips are the tab bar's own idiom, which this app already teaches on
+    // every city page, so the control needs no explaining. Run with Claude goes
+    // FIRST because it is the action people want; Copy and Download follow as
+    // the fallbacks they actually are.
+    var PASSES = [
+      { kind: 'research', chip: 'Research', file: 'research-city.md', noun: 'research',
+        desc: 'One pass across eat, see, do and services, weighted to your profile. ' +
+          'New places only: nothing you have already planned is touched.' },
+      { kind: 'interests', chip: 'Interests', file: 'interests-delta.md', noun: 'interests',
+        desc: 'New places in this city that match your interest profile, in their own ' +
+          'section, on top of what is already here.' },
+      { kind: 'intel', chip: 'Intel', file: 'intel-pass.md', noun: 'intel',
+        desc: 'What to actually order or do at the places this guide already holds, ' +
+          'from what reviewers say repeatedly.' },
+      { kind: 'ratings', chip: 'Ratings', file: 'ratings-refresh.md', noun: 'ratings',
+        desc: 'Current Google Maps stars and review counts for the places still in ' +
+          'play (plan and backup), as a badge on each card.' }
+    ];
+    // Research leads: it is the pass that fills an empty city, which is the
+    // state this modal is most often opened in.
+    var passKind = 'research';
+    function passFor(kind) {
+      return PASSES.filter(function (p) { return p.kind === kind; })[0] || PASSES[0];
+    }
+    // Only the interests pass needs a profile. The others read the city.
+    function passBlocked(p) {
+      return (p.kind === 'interests' && profileEmpty) ? 'Add interests in Profile first' : null;
+    }
+
+    var chipRow = el('div', 'mrow enrich-chips');
+    var passDesc = el('p', 'diff', '');
+    var actRow = el('div', 'mrow');
+    m.box.appendChild(chipRow);
+    m.box.appendChild(passDesc);
+    m.box.appendChild(actRow);
+
+    function drawPass() {
+      var p = passFor(passKind);
+      var blocked = passBlocked(p);
+      chipRow.innerHTML = '';
+      PASSES.forEach(function (opt) {
+        var on = opt.kind === passKind;
+        var c = el('button', 'ctl' + (on ? ' is-current' : ''), opt.chip);
+        c.type = 'button';
+        if (on) c.setAttribute('aria-current', 'true');
+        c.onclick = function () { passKind = opt.kind; msg.textContent = ''; drawPass(); };
+        chipRow.appendChild(c);
+      });
+      passDesc.textContent = p.desc + (blocked ? ' (' + blocked + ')' : '');
+      actRow.innerHTML = '';
       // Offered once ONE TAP CAN ACTUALLY RUN, which since the managed tier
       // shipped means a saved key OR a plan that runs AI on our key. The no-key
       // free account keeps the copy/paste path as its only option, exactly as
       // before, and is never shown a button that would refuse it.
-      if (!disabledReason && aiOneTapReady()) {
+      if (!blocked && aiOneTapReady()) {
         var run = el('button', 'ctl to-done', 'Run with Claude');
         run.type = 'button';
-        run.onclick = function () { runWithClaude(kind, run); };
-        row.appendChild(run);
+        run.onclick = function () { runWithClaude(p.kind, run); };
+        actRow.appendChild(run);
       }
-      return row;
+      var copy = el('button', 'ctl', 'Copy prompt');
+      copy.type = 'button';
+      var dl = el('button', 'ctl', 'Download .md');
+      dl.type = 'button';
+      if (blocked) {
+        // Never offer a control that cannot succeed: disable it and say why.
+        copy.disabled = dl.disabled = true;
+        copy.title = dl.title = blocked;
+      } else {
+        copy.onclick = function () { var t = build(p.kind); if (t !== null) copyOut(t); };
+        dl.onclick = function () { var t = build(p.kind); if (t !== null) downloadOut(t, p.file); };
+      }
+      actRow.appendChild(copy);
+      actRow.appendChild(dl);
+      if (blocked) {
+        var goProfile = el('button', 'ctl', 'Open Profile');
+        goProfile.type = 'button';
+        goProfile.onclick = function () { m.close(); openProfileModal(); };
+        actRow.appendChild(goProfile);
+      }
     }
-
-    // Each pass gets a heading in the same uppercase-muted idiom the More
-    // sheet's group labels use, so the three blocks read as three choices
-    // rather than one long paragraph with buttons in it.
-    var profileEmpty = CityOps.profile.isEmpty(store.profile);
-
-    // The headline pass: one tap that researches the whole city across every
-    // category and weights the picks to the profile, so the common case ("find
-    // me more to do here") is a single button rather than a choice between
-    // three narrower prompts. It runs with no profile too, just less tailored,
-    // so it is never gated the way the interests delta is.
-    m.box.appendChild(el('div', 'sheet-grouplabel enrich-h', 'Research this city'));
-    m.box.appendChild(el('p', 'diff', 'One pass across eat, see, do and services, weighted to your ' +
-      'profile. New places only: nothing you have already planned is touched.'));
-    var rrow = promptRow('research', 'research-city.md', null, 'research');
-    if (profileEmpty) {
-      var researchProfile = el('button', 'ctl', 'Open Profile');
-      researchProfile.type = 'button';
-      researchProfile.title = 'Add interests so the research is tailored to you';
-      researchProfile.onclick = function () { m.close(); openProfileModal(); };
-      rrow.appendChild(researchProfile);
-    }
-    m.box.appendChild(rrow);
-
-    m.box.appendChild(el('div', 'sheet-grouplabel enrich-h', 'Interests delta'));
-    m.box.appendChild(el('p', 'diff', 'New places in this city that match your interest profile, ' +
-      'in their own section, on top of what is already here.'));
-    var irow = promptRow('interests', 'interests-delta.md',
-      profileEmpty ? 'Add interests in Profile first' : null, 'interests');
-    if (profileEmpty) {
-      var goProfile = el('button', 'ctl', 'Open Profile');
-      goProfile.type = 'button';
-      goProfile.onclick = function () { m.close(); openProfileModal(); };
-      irow.appendChild(goProfile);
-    }
-    m.box.appendChild(irow);
-
-    m.box.appendChild(el('div', 'sheet-grouplabel enrich-h', 'Intel pass'));
-    m.box.appendChild(el('p', 'diff', 'What to actually order or do at the places this guide ' +
-      'already holds, from what reviewers say repeatedly.'));
-    m.box.appendChild(promptRow('intel', 'intel-pass.md', null, 'intel'));
-
-    // Third builder: the numbers go stale in a way the rest of a guide does
-    // not, so this is the one pass worth re-running on a guide that is
-    // otherwise finished. It touches nothing but `rating`.
-    m.box.appendChild(el('div', 'sheet-grouplabel enrich-h', 'Ratings refresh'));
-    m.box.appendChild(el('p', 'diff', 'Current Google Maps stars and review counts ' +
-      'for the places still in play (plan and backup), as a badge on each card.'));
-    m.box.appendChild(promptRow('ratings', 'ratings-refresh.md', null, 'ratings'));
+    drawPass();
 
     m.box.appendChild(el('p', 'diff', 'Paste what your AI returns here: JSON or markdown, whichever it gave you. ' +
       'It is a partial payload, so only new items, intel and ratings land, never a whole guide.'));
