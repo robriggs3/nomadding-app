@@ -1354,6 +1354,49 @@ test('mergeDelta applied twice is a no-op: everything is already there', () => {
   assert.deepEqual(second.data, first.data);
 });
 
+test('a replace says what it would destroy before it destroys it', () => {
+  // 2026-09-06: Rob copied the schema EXAMPLE out of PROMPT.md instead of the
+  // prompt. That example is a real one-item Batumi guide whose dates derive
+  // the id of his real Batumi. The app said "Batumi: 1 place across 1 section.
+  // Press Confirm to replace this city with it", he confirmed, and 58 places
+  // became one. Every number needed to stop him was already computed;
+  // diffSummary just ran after the write instead of before it.
+  const city = (n, prefix) => ({
+    schema: 1, city: { name: 'Batumi', dates: { from: '2026-08-08', to: '2026-08-15' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: Array.from({ length: n }, (_, i) => ({
+      id: (prefix || 'i') + i, section: 'dinner', status: 'plan', name: 'P' + i,
+      links: [], place_id: null, verified: null }))
+  });
+
+  const loss = C.replaceLoss(city(58), city(1, 'example'));
+  assert.ok(loss, 'the Batumi clobber produced no warning at all');
+  assert.equal(loss.removed, 58);
+  assert.equal(loss.currentItems, 58);
+  assert.equal(loss.incomingItems, 1);
+  assert.equal(loss.severe, true, 'losing a whole city was not judged severe');
+  const text = C.replaceLossText('Batumi', loss);
+  // The three numbers a person needs, in a sentence rather than a schema.
+  assert.ok(/Batumi has 58 places/.test(text));
+  assert.ok(/leaves 1/.test(text));
+  assert.ok(/58 places are removed for good/.test(text));
+
+  // And the other half, which is what keeps this from becoming noise: a normal
+  // refresh that drops a few stale picks must say nothing extra.
+  const refresh = C.replaceLoss(city(58), city(60));
+  assert.equal(refresh, null, 'a clean refresh triggered a loss warning');
+  const smallDrop = city(58);
+  const nearlySame = city(58);
+  nearlySame.items = nearlySame.items.slice(3);   // three picks retired
+  const sd = C.replaceLoss(smallDrop, nearlySame);
+  assert.ok(sd && sd.removed === 3, 'a three item drop was not counted');
+  assert.equal(sd.severe, false, 'retiring three picks demanded an extra press');
+
+  // Nothing to lose, nothing to say.
+  assert.equal(C.replaceLoss(city(0), city(20)), null);
+  assert.equal(C.replaceLoss(city(58), city(58)), null, 're-pasting the same guide warned');
+});
+
 test('mergeDelta ignores an existing section id rather than overwriting its label', () => {
   const d = { schema: 1, delta: true, sections: [{ id: 'dinner', label: 'Renamed by the AI' }] };
   const r = C.mergeDelta(GOOD, d);

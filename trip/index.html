@@ -10151,6 +10151,47 @@ var CityOps = (function () {
     return out;
   }
 
+  // ---- What a replace would cost, said before it happens (2026-09-06) ----
+  //
+  // Rob copied the schema EXAMPLE out of PROMPT.md instead of the prompt, and
+  // that example is a real one-item Batumi guide whose dates derive the id of
+  // his real Batumi. The app said "Batumi: 1 place across 1 section. Press
+  // Confirm to replace this city with it." He confirmed, and 58 places became
+  // one. Every number needed to stop him was already computed: diffSummary has
+  // always known how many items would be removed, it just ran AFTER the write.
+  //
+  // Pure. Returns null when nothing meaningful is lost, so a normal refresh of
+  // a guide (58 places in, 60 out) says nothing extra.
+  function replaceLoss(current, incoming) {
+    var cur = (current && Array.isArray(current.items)) ? current.items : [];
+    var inc = (incoming && Array.isArray(incoming.items)) ? incoming.items : [];
+    if (!cur.length) return null;                 // nothing there to lose
+    var incIds = {};
+    inc.forEach(function (i) { if (i && i.id) incIds[i.id] = 1; });
+    var removed = 0;
+    cur.forEach(function (i) { if (i && i.id && !incIds[i.id]) removed++; });
+    if (!removed) return null;
+    // Severe is what earns an extra press: losing most of a city, or losing a
+    // lot of it outright. A guide that drops a couple of stale picks is a
+    // normal refresh and must not start nagging.
+    var severe = removed >= 5 && (inc.length * 2 < cur.length || removed >= 20);
+    return {
+      removed: removed, currentItems: cur.length, incomingItems: inc.length,
+      currentSections: (current.sections || []).length,
+      incomingSections: (incoming.sections || []).length,
+      severe: severe
+    };
+  }
+
+  // The sentence, in the traveler's terms: what is here, what would be here,
+  // and the number that matters between them.
+  function replaceLossText(name, loss) {
+    return (name ? name + ' has ' : 'This city has ') + loss.currentItems + ' ' +
+      (loss.currentItems === 1 ? 'place' : 'places') + ' right now. Replacing it leaves ' +
+      loss.incomingItems + ', and ' + loss.removed + ' ' +
+      (loss.removed === 1 ? 'place is' : 'places are') + ' removed for good.';
+  }
+
   function diffSummary(oldData, newData) {
     var oldIds = {};
     oldData.items.forEach(function (i) { oldIds[i.id] = 1; });
@@ -10500,10 +10541,16 @@ var CityOps = (function () {
           return;
         }
         dropConvertRow();
-        if (read.tolerant) {
+        // A replace that destroys a city needs a second press whether or not
+        // the paste needed repairing. Tolerance is about the BYTES; this is
+        // about the city, and the city is the part nobody gets back.
+        var loss = replaceLoss(effectiveData(ctx.base, ctx.store.load()), read.data);
+        if (read.tolerant || (loss && loss.severe)) {
           pending = read.data;
           apply.textContent = 'Confirm';
-          msg.textContent = read.message + ' Press Confirm to replace this city with it.';
+          msg.textContent = read.message +
+            (loss ? ' ' + replaceLossText(ctx.base && ctx.base.city && ctx.base.city.name, loss) : '') +
+            ' Press Confirm to replace this city with it.';
           return;
         }
         data = read.data;
@@ -11000,7 +11047,7 @@ var CityOps = (function () {
     emptyState: emptyState, makeStore: makeStore, setStatus: setStatus,
     effectiveStatus: effectiveStatus, effectiveData: effectiveData, viewModel: viewModel,
     TRANSITIONS: TRANSITIONS, fmtRange: fmtRange, buildExport: buildExport,
-    diffSummary: diffSummary, shareModel: shareModel,
+    diffSummary: diffSummary, replaceLoss: replaceLoss, replaceLossText: replaceLossText, shareModel: shareModel,
     effectiveDay: effectiveDay, setDay: setDay, stayDates: stayDates,
     normalizeState: normalizeState, effectiveDates: effectiveDates,
     setStayDates: setStayDates, toggleSection: toggleSection,
