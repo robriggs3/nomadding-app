@@ -1936,6 +1936,33 @@ test('a section the model invented still reaches the right tab', () => {
   assert.equal(C.tabForSection({ id: 'zzz', label: 'Miscellany' }), 'info');
 });
 
+test('the prompt asks for proximity as a place fact, never as a plan instruction', () => {
+  // Rob, 2026-09-06: the older freeform guides said "200m from this other
+  // thing, good to do both". The current ones use proximity to CHOOSE and then
+  // throw the reasoning away. This asks for it back, with the constraint that
+  // makes it survive: the traveler reorders their days constantly, so a
+  // sentence about the plan is wrong the moment they do.
+  const fs = require('fs');
+  const path = require('path');
+  const prompt = fs.readFileSync(path.join(__dirname, '..', 'PROMPT.md'), 'utf8');
+  // Asked for in the whole-guide contract and in the research pass, or a
+  // re-run would quietly strip it back out of a guide that had it.
+  // PROMPT.md is wrapped markdown, so every phrase here can straddle a line
+  // break. Collapse whitespace before matching or the assertion is really
+  // testing where the paragraph happened to wrap.
+  const flat = (t) => t.replace(/\s+/g, ' ');
+  const whole = flat(prompt);
+  const research = flat(prompt.slice(prompt.indexOf('RERUN:RESEARCH'), prompt.indexOf('/RERUN:RESEARCH')));
+  assert.ok(/fact about the PLACE/.test(whole), 'the whole-guide contract lost the place-fact rule');
+  assert.ok(/fact about the PLACE/.test(research), 'the research pass lost the place-fact rule');
+  // And both name the failure mode, because "say where it is" without this
+  // reads as an invitation to write itinerary prose.
+  [whole, research].forEach(function (text, i) {
+    assert.ok(/on your way back/.test(text),
+      (i ? 'the research pass' : 'the contract') + ' stopped naming the phrasing to avoid');
+  });
+});
+
 test('every section id PROMPT.md pins is one the engine files correctly', () => {
   // The prompt and the tab mapping are two halves of one contract and they
   // drifted apart silently. This is the seam, so it is asserted: if either side
