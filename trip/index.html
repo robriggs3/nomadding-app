@@ -8291,6 +8291,59 @@ var CityOps = (function () {
     return out;
   }
 
+  // WHICH KEY IS ABOUT TO BE SPENT, said before the button is pressed.
+  //
+  // Earned the hard way on 2026-09-06. A saved API key silently beats the
+  // managed tier (see aiTransport: `if (o.hasKey) return 'direct'`), which is
+  // the right rule, because moving somebody onto our bill without being asked
+  // would be deciding their spend for them. What was wrong was that the app
+  // never said so. Generate was pressed three times against a key nobody
+  // remembered saving, the managed proxy was never called once, and the only
+  // way anyone found out was reading the database. The transport was always
+  // knowable; it was just never printed.
+  //
+  // ctx: {hasKey, tier, entitled, signedIn} exactly as aiTransport takes it,
+  // plus `usage`, which is what my_ai_usage() returned or null. The decision is
+  // made by calling aiTransport rather than re-deriving it, so this line can
+  // never disagree with the request that follows it.
+  //
+  // Returns {show, onOurKey, text}. `show` is false only for 'none', because a
+  // traveler with no transport at all is already being told why by the shells'
+  // aiNoTransportText, and two refusals stacked is worse than one.
+  function aiTransportLine(ctx) {
+    var o = ctx || {};
+    var t = aiTransport(o);
+    var out = { show: false, onOurKey: false, text: '' };
+    if (t === 'none') return out;
+    out.show = true;
+    if (t === 'direct') {
+      // Named in full. "Your own key" is the sentence that would have saved
+      // the hour: it is the only thing that distinguishes a run we can meter
+      // from a run we cannot see at all.
+      out.text = 'This runs on your own Claude key, so it is billed to your Anthropic account ' +
+        'and no allowance of ours applies. Clear the key in Profile to run it on our key instead.';
+      return out;
+    }
+    out.onOurKey = true;
+    var m = aiMeter(o.usage);
+    // The meter read can still be in flight, and a number nobody has yet is
+    // worse than no number: say what the plan includes and leave the count to
+    // the next draw, exactly as the modals already re-draw on entitlement.
+    if (!m.show) {
+      out.text = 'This runs on our key, included in your plan.';
+      return out;
+    }
+    if (m.atCap) {
+      out.text = 'This runs on our key, and this month\'s included AI is used up. It resets ' +
+        aiResetPhrase(o.usage && o.usage.resets_at) + '.';
+      return out;
+    }
+    var left = Math.max(0, m.guidesCap - m.guidesUsed);
+    out.text = 'This runs on our key. About ' + left + ' of your ' + m.guidesCap +
+      ' cities of research left this month.';
+    return out;
+  }
+
   // The meter's own localhost-only mock, the twin of entitlementMock and gated
   // the same way and for the same reason: the two states worth LOOKING at (a
   // meter part way through a month, and a meter at the cap) cannot be reached
@@ -11235,6 +11288,9 @@ var CityOps = (function () {
       MANAGED_TIERS: AI_MANAGED_TIERS,
       transport: aiTransport, url: aiProxyUrl,
       meter: aiMeter, pauseMessage: aiPauseMessage, guides: aiGuides,
+      // Which key the next tap spends, in one sentence, for the modals to
+      // print above the button. Pure, so the shells never decide it twice.
+      transportLine: aiTransportLine,
       // Web search, own-key only (B1). The boundary is explained at
       // aiSearchTools: search costs land in input tokens and a per-search fee,
       // neither of which the output-token allowance can see.

@@ -7892,6 +7892,78 @@ test('the meter says so at the cap, and never reads past 100 per cent', () => {
   assert.equal(over.guidesUsed, over.guidesCap);
 });
 
+// The bug this whole function exists for. On 2026-09-06 Generate was pressed
+// three times on a managed account and the managed proxy was never called
+// once, because a Claude key nobody remembered saving was still on the device
+// and a saved key wins. Every gate was working exactly as designed. The only
+// thing missing was a sentence saying which one had won.
+test('the transport line names the key the next tap will spend', () => {
+  const paid = { entitled: true, signedIn: true, tier: 'managed' };
+  const own = AI.transportLine(Object.assign({ hasKey: true }, paid));
+  assert.equal(own.show, true);
+  assert.equal(own.onOurKey, false);
+  // "your own" is the phrase that would have ended the hour, so it is pinned
+  // rather than left to whoever edits this copy next.
+  assert.ok(/your own claude key/i.test(own.text), own.text);
+  // And it has to say what to DO about it, or it is a diagnosis with no cure.
+  assert.ok(/clear the key/i.test(own.text), own.text);
+
+  const ours = AI.transportLine(Object.assign({ hasKey: false }, paid));
+  assert.equal(ours.onOurKey, true);
+  assert.ok(/our key/i.test(ours.text), ours.text);
+  assert.ok(!/your own/i.test(ours.text), ours.text);
+});
+
+test('the transport line is silent when there is no transport to name', () => {
+  // aiNoTransportText already explains this case in the modals. Two refusals
+  // stacked reads as two problems.
+  const none = AI.transportLine({ hasKey: false, signedIn: true, entitled: true, tier: 'free' });
+  assert.equal(none.show, false);
+  assert.equal(none.text, '');
+  assert.equal(AI.transportLine({ entitled: false, hasKey: true }).show, false);
+  assert.equal(AI.transportLine().show, false);
+});
+
+test('the transport line reports the allowance LEFT, not the allowance used', () => {
+  const usage = { signed_in: true, tier: 'managed',
+    output_tokens: 4 * AI.GUIDE_OUTPUT_TOKENS, resets_at: '2026-10-01' };
+  const line = AI.transportLine({ hasKey: false, signedIn: true, entitled: true,
+    tier: 'managed', usage: usage });
+  // The meter says 4 of 12 USED; standing in front of a button, the number
+  // that decides whether to press it is the 8 that are left.
+  assert.ok(/about 8 of your 12 cities of research left/i.test(line.text), line.text);
+  assert.ok(!/about 4 /i.test(line.text), line.text);
+
+  // At the cap it says so and names the reset, rather than "about 0 left".
+  const spent = AI.transportLine({ hasKey: false, signedIn: true, entitled: true, tier: 'managed',
+    usage: { signed_in: true, tier: 'managed', output_tokens: AI.MONTHLY_OUTPUT_TOKENS,
+      resets_at: '2026-10-01' } });
+  assert.ok(/used up/i.test(spent.text), spent.text);
+  assert.ok(/October 1, 2026/.test(spent.text), spent.text);
+
+  // A meter that has not landed yet must not print a number it does not have.
+  const early = AI.transportLine({ hasKey: false, signedIn: true, entitled: true, tier: 'managed' });
+  assert.ok(/our key/i.test(early.text), early.text);
+  assert.ok(!/\d/.test(early.text), 'a number appeared before the meter read: ' + early.text);
+});
+
+test('the transport line can never disagree with the request that follows it', () => {
+  // It calls aiTransport rather than re-deriving the decision. Assert by
+  // deletion: change the line to guess from `tier` alone, the way a second
+  // implementation would, and the saved-key case silently reports our key.
+  [
+    { hasKey: true, signedIn: true, entitled: true, tier: 'managed' },
+    { hasKey: false, signedIn: true, entitled: true, tier: 'managed' },
+    { hasKey: true, signedIn: false, entitled: true, tier: '' },
+    { hasKey: false, signedIn: true, entitled: true, tier: 'free' }
+  ].forEach(function (ctx) {
+    const t = AI.transport(ctx);
+    const line = AI.transportLine(ctx);
+    assert.equal(line.show, t !== 'none', JSON.stringify(ctx));
+    assert.equal(line.onOurKey, t === 'proxy', JSON.stringify(ctx));
+  });
+});
+
 test('every reason the AI can pause names the free path in the same breath', () => {
   ['over_monthly_cap', 'rate_limited', 'busy', 'wrong_tier', 'not_entitled', 'paused', 'anything']
     .forEach(function (reason) {
