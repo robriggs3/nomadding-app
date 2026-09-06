@@ -609,3 +609,8 @@
     .hl-chip{min-height:36px;}
   }
 
+/* A note about the whole day, under the Plan tab's day header. Set apart from
+   an item's own when-line by a rule on the leading edge, because it belongs to
+   the day rather than to any one pick below it. */
+.day-note{border-left:3px solid var(--accent); padding-left:10px; margin:6px 0 10px;
+  font-style:italic; color:var(--text-2);}

@@ -124,6 +124,23 @@ var CityOps = (function () {
         if (!s.id || !s.label) errors.push('sections[' + i + '] needs id and label');
       });
     }
+    // dayNotes: optional, and the one place a fact about a DAY can live.
+    // Keys are ISO dates so a note cannot drift onto the wrong day when the
+    // stay is re-dated; a note for a day outside the stay is not an error,
+    // because shortening a trip should not invalidate a guide.
+    if (data.dayNotes !== undefined && data.dayNotes !== null) {
+      if (typeof data.dayNotes !== 'object' || Array.isArray(data.dayNotes)) {
+        errors.push('dayNotes must be an object keyed by date');
+      } else {
+        Object.keys(data.dayNotes).forEach(function (k) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(k)) {
+            errors.push('dayNotes key "' + k + '" must be a YYYY-MM-DD date');
+          } else if (typeof data.dayNotes[k] !== 'string') {
+            errors.push('dayNotes["' + k + '"] must be text');
+          }
+        });
+      }
+    }
     if (!Array.isArray(data.items)) {
       errors.push('items[] required');
     } else {
@@ -183,7 +200,7 @@ var CityOps = (function () {
   var DELTA_STATUS_HINT = ' (a delta may only add plan or backup items)';
 
   function emptyDeltaSummary() {
-    return { added: 0, skipped: 0, sectionsAdded: 0, intelApplied: 0, intelSkipped: 0,
+    return { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0,
       ratingsApplied: 0, ratingsSkipped: 0 };
   }
 
@@ -341,6 +358,24 @@ var CityOps = (function () {
     var out = deepClone(cityData);
     if (!Array.isArray(out.sections)) out.sections = [];
     if (!Array.isArray(out.items)) out.items = [];
+
+    // Day notes arrive the same way places do: added where there is a gap,
+    // never over the top of one that is already there. A re-run that decided
+    // Tuesday reads differently must not silently rewrite what the last run
+    // said about Tuesday, for the same reason it may not re-add a place.
+    if (delta.dayNotes && typeof delta.dayNotes === 'object' && !Array.isArray(delta.dayNotes)) {
+      if (!out.dayNotes || typeof out.dayNotes !== 'object') out.dayNotes = {};
+      Object.keys(delta.dayNotes).forEach(function (iso) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return;
+        if (typeof delta.dayNotes[iso] !== 'string') return;
+        if (Object.prototype.hasOwnProperty.call(out.dayNotes, iso)) {
+          summary.dayNotesSkipped++;
+          return;
+        }
+        out.dayNotes[iso] = delta.dayNotes[iso];
+        summary.dayNotesAdded++;
+      });
+    }
 
     // Same prototype-safe pair as existingIds above: a section id of
     // "constructor" would otherwise read as already present.
@@ -550,7 +585,7 @@ var CityOps = (function () {
   var VIEW_MODES = ['type', 'day', 'today'];
 
   function emptyState() {
-    return { itemStatus: {}, itemDay: {}, itemTitle: {}, dayOrder: {}, dayItemOrder: {},
+    return { itemStatus: {}, itemDay: {}, itemTitle: {}, dayNote: {}, dayOrder: {}, dayItemOrder: {},
       sectionItemOrder: {},
       collapsedSections: {}, collapsedPlanDays: {}, viewMode: null, tab: null,
       pinned: [], archived: null,
@@ -561,6 +596,9 @@ var CityOps = (function () {
     if (!st || typeof st !== 'object') return emptyState();
     st.itemStatus = st.itemStatus || {};
     st.itemDay = st.itemDay || {};
+    // Absent in every state written before day notes shipped, so an old state
+    // simply reads as "the traveler has not written a note on any day".
+    st.dayNote = st.dayNote || {};
     st.dayOrder = st.dayOrder || {};
     // Per-item order WITHIN one Plan-tab day (see the dayItemOrder block
     // below). Absent in every state written before this feature shipped, so
@@ -678,6 +716,40 @@ var CityOps = (function () {
       return ownProp(state.itemDay, it.id) || null;
     }
     return it.day || null;
+  }
+
+  // A note about a DAY rather than about a place. Rob, 2026-09-06: "this is an
+  // hour away, so block off your morning and shift your work schedule to
+  // evening". Half of that is a fact about a place and belongs on the item;
+  // the other half is a fact about the shape of the day and had nowhere to
+  // live, so it was being crammed into the note of whichever pick happened to
+  // sit first, where it rotted as soon as the day was re-sorted.
+  //
+  // Authored in the guide (data.dayNotes) and overridable by the traveler
+  // (state.dayNote), exactly like a day assignment: the guide proposes, the
+  // person decides. An empty string is a real value meaning "cleared", which
+  // is why this checks for the key rather than for truthiness.
+  function effectiveDayNote(data, state, iso) {
+    var st = state || {};
+    if (st.dayNote && Object.prototype.hasOwnProperty.call(st.dayNote, iso)) {
+      var own = st.dayNote[iso];
+      return typeof own === 'string' ? own : '';
+    }
+    var authored = data && data.dayNotes;
+    if (authored && Object.prototype.hasOwnProperty.call(authored, iso)) {
+      return typeof authored[iso] === 'string' ? authored[iso] : '';
+    }
+    return '';
+  }
+
+  // null clears back to whatever the guide says; '' means the traveler has
+  // deliberately emptied it and does not want the guide's version back.
+  function setDayNote(state, iso, text) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error('bad day "' + iso + '"');
+    if (!state.dayNote) state.dayNote = {};
+    if (text === null) delete state.dayNote[iso];
+    else state.dayNote[iso] = String(text);
+    return state;
   }
 
   function setDay(state, id, iso) {
@@ -7911,6 +7983,16 @@ var CityOps = (function () {
   // (unless collapsed) one .planlist of cards. That structure is what the
   // drag code reads: the group is the drop target, the list is what gets
   // reordered, and data-day-iso on both is the date a drop writes.
+  // One line about the shape of a day, if the guide or the traveler wrote one.
+  // Renders nothing at all when there is no note, so a day without one looks
+  // exactly as it did before this existed.
+  function appendDayNote(parent, data, state, iso) {
+    if (!iso) return;
+    var text = effectiveDayNote(data, state, iso);
+    if (!text) return;
+    parent.appendChild(el('p', 'when-line day-note', text));
+  }
+
   function planDayGroup(iso) {
     var group = el('div', 'planday');
     group.setAttribute('data-day-iso', iso);
@@ -7971,6 +8053,7 @@ var CityOps = (function () {
     var todayGroup = planDayGroup(pm.todayIso);
     todayGroup.className += ' planday-today';
     todayGroup.appendChild(el('h2', null, dayLabel(pm.todayIso)));
+    appendDayNote(todayGroup, data, state, pm.todayIso);
     todayGroup.appendChild(planDayList(pm.todayIso, pm.today));
     main.appendChild(todayGroup);
     pm.days.forEach(function (d) {
@@ -7997,6 +8080,11 @@ var CityOps = (function () {
       };
       h2.appendChild(tbtn);
       group.appendChild(h2);
+      // The note sits under the header and above the items, because it is
+      // about the whole day: "the boat leaves at 10:15, so work moves to the
+      // evening" has to be read before the first pick, not after the last.
+      // Hidden on a collapsed day along with everything else.
+      if (!collapsed) appendDayNote(group, data, state, d.iso);
       // A collapsed day deliberately gets NO list: the group is still a drop
       // target (its header is what the dragged card lands on), and having no
       // list is exactly how the drag code recognizes the collapsed case.
@@ -9040,7 +9128,8 @@ var CityOps = (function () {
     effectiveStatus: effectiveStatus, effectiveData: effectiveData, viewModel: viewModel,
     TRANSITIONS: TRANSITIONS, fmtRange: fmtRange, buildExport: buildExport,
     diffSummary: diffSummary, replaceLoss: replaceLoss, replaceLossText: replaceLossText, shareModel: shareModel,
-    effectiveDay: effectiveDay, setDay: setDay, stayDates: stayDates,
+    effectiveDay: effectiveDay, setDay: setDay,
+    effectiveDayNote: effectiveDayNote, setDayNote: setDayNote, stayDates: stayDates,
     normalizeState: normalizeState, effectiveDates: effectiveDates,
     setStayDates: setStayDates, toggleSection: toggleSection,
     // Expand all / Collapse all: the two pure writers behind the per-tab
