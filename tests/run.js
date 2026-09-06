@@ -7892,6 +7892,65 @@ test('the meter says so at the cap, and never reads past 100 per cent', () => {
   assert.equal(over.guidesUsed, over.guidesCap);
 });
 
+// ---------------------------------------------------------------------------
+// A cleared credential has to reach the ACCOUNT, or it did not happen
+// ---------------------------------------------------------------------------
+// Found on 2026-09-06 by reading the account's own profile row: it still held a
+// 216-character Claude key stamped 13:41:25Z, hours after the key was cleared
+// on the device. The row had not been written since. Clearing a key looked
+// exactly like clearing a key, and the account never heard about it.
+//
+// signOut is pulled out of the assembled index.html by name, the same way
+// callClaudeStream is, so these drive the shipped code rather than a copy.
+function loadSignOut(deps) {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function signOut(');
+  assert.ok(start !== -1, 'signOut is missing from the assembled app');
+  const end = html.indexOf('\n  }\n', start);
+  assert.ok(end !== -1, 'could not find the end of signOut');
+  const src = html.slice(start, end + 4);
+  const names = ['session', 'SUPA', 'fetch', 'flushPendingPush', 'saveSession',
+    'seedStateStamps', 'LS', 'SYNC_KEY', 'clearSyncAlert', 'renderPanel'];
+  const fn = new Function(...names, 'state',
+    'var stateStamp, pushQueueData, pushQueueState, pushQueueProfile, sidecarsKnown, ' +
+    'pushTimer = state.pushTimer, lastSyncIso;\n' +
+    src + '\nreturn signOut;');
+  return fn(deps.session, { url: 'https://p.supabase.co', anon: 'anon' },
+    function () { return Promise.resolve({}); },
+    deps.flushPendingPush, function () {}, function () { return {}; },
+    null, 'sync', function () {}, function () {}, { pushTimer: 1 });
+}
+
+test('signing out flushes what is queued instead of dropping it on the floor', () => {
+  // The failure this replaces: signOut emptied pushQueueProfile and cancelled
+  // the 2s debounce, so a key cleared one second earlier left with the session.
+  let flushed = 0;
+  const signOut = loadSignOut({
+    session: { access_token: 'live-token' },
+    flushPendingPush: function () { flushed++; return Promise.resolve(true); }
+  });
+  signOut();
+  assert.equal(flushed, 1, 'sign-out did not flush the pending push');
+});
+
+test('the account taking a cleared key and not taking it are different sentences', () => {
+  const landed = C.syncKit.keyClearText(true);
+  const lost = C.syncKit.keyClearText(false);
+  const offline = C.syncKit.keyClearText(null);
+  assert.notEqual(landed, lost);
+  // The dangerous case has to NAME the danger: the account still has the key,
+  // and another device can hand it back. A cheerful "cleared" would be a lie.
+  assert.ok(/your account still has the old one/i.test(lost), lost);
+  assert.ok(/bring the old key back/i.test(lost), lost);
+  assert.ok(/account/i.test(landed), landed);
+  // Signed out there is no account copy to worry about, so it must not warn
+  // about one. Undefined is treated as the same "nothing to push" answer.
+  assert.ok(!/account/i.test(offline), offline);
+  assert.equal(C.syncKit.keyClearText(undefined), offline);
+});
+
 // The bug this whole function exists for. On 2026-09-06 Generate was pressed
 // three times on a managed account and the managed proxy was never called
 // once, because a Claude key nobody remembered saving was still on the device

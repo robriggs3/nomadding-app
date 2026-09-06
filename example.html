@@ -6432,6 +6432,32 @@ var CityOps = (function () {
     return (TOKEN_NAMED_RE.test(b) && TOKEN_BAD_RE.test(b)) ? 'dead' : 'transient';
   }
 
+  // CLEARING A CREDENTIAL IS NOT AN EDIT LIKE THE OTHERS.
+  //
+  // Every other local change can afford to fail quietly, because the retry
+  // story is "local stays newer than the server, so the next pull's reconcile
+  // pushes it" and the worst case is a late sync. A cleared key is different in
+  // two ways. The account still holds the old value, so the thing the traveler
+  // meant to revoke is still out there. And the reason people clear it is
+  // usually to change which key a run spends, so "it will sync eventually" is
+  // an answer to a question nobody asked.
+  //
+  // landed: true when the account took the clear, false when the push failed,
+  // null when there was nothing to push because this device is signed out.
+  function keyClearText(landed) {
+    if (landed === null || landed === undefined) {
+      return 'Key cleared on this device.';
+    }
+    if (landed) {
+      return 'Key cleared on this device and on your account.';
+    }
+    // Named plainly, because the recovery is not obvious and the failure is
+    // invisible: nothing looks wrong until another device signs in.
+    return 'Key cleared on this device, but your account still has the old one. ' +
+      'It will clear the next time this device syncs. Until then, signing in ' +
+      'somewhere else can bring the old key back.';
+  }
+
   function buildRows(field, entries) {
     var rows = [];
     (entries || []).forEach(function (e) {
@@ -10038,6 +10064,9 @@ var CityOps = (function () {
       // carrying one, so it can push the cleaned row.
       legacyGithubSidecar: legacyGithubSidecar,
       refreshFailure: refreshFailure,
+      // What Profile says after Clear key, which depends on whether the ACCOUNT
+      // took the clear and not just this device.
+      keyClearText: keyClearText,
       // Removal tombstones: a removed city stays removed, on every device.
       // All pure, all unit tested; the shell owns the DELETE calls and the
       // localStorage key, exactly as it owns every other piece of transport.

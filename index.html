@@ -6580,6 +6580,32 @@ var CityOps = (function () {
     return (TOKEN_NAMED_RE.test(b) && TOKEN_BAD_RE.test(b)) ? 'dead' : 'transient';
   }
 
+  // CLEARING A CREDENTIAL IS NOT AN EDIT LIKE THE OTHERS.
+  //
+  // Every other local change can afford to fail quietly, because the retry
+  // story is "local stays newer than the server, so the next pull's reconcile
+  // pushes it" and the worst case is a late sync. A cleared key is different in
+  // two ways. The account still holds the old value, so the thing the traveler
+  // meant to revoke is still out there. And the reason people clear it is
+  // usually to change which key a run spends, so "it will sync eventually" is
+  // an answer to a question nobody asked.
+  //
+  // landed: true when the account took the clear, false when the push failed,
+  // null when there was nothing to push because this device is signed out.
+  function keyClearText(landed) {
+    if (landed === null || landed === undefined) {
+      return 'Key cleared on this device.';
+    }
+    if (landed) {
+      return 'Key cleared on this device and on your account.';
+    }
+    // Named plainly, because the recovery is not obvious and the failure is
+    // invisible: nothing looks wrong until another device signs in.
+    return 'Key cleared on this device, but your account still has the old one. ' +
+      'It will clear the next time this device syncs. Until then, signing in ' +
+      'somewhere else can bring the old key back.';
+  }
+
   function buildRows(field, entries) {
     var rows = [];
     (entries || []).forEach(function (e) {
@@ -10186,6 +10212,9 @@ var CityOps = (function () {
       // carrying one, so it can push the cleaned row.
       legacyGithubSidecar: legacyGithubSidecar,
       refreshFailure: refreshFailure,
+      // What Profile says after Clear key, which depends on whether the ACCOUNT
+      // took the clear and not just this device.
+      keyClearText: keyClearText,
       // Removal tombstones: a removed city stays removed, on every device.
       // All pure, all unit tested; the shell owns the DELETE calls and the
       // localStorage key, exactly as it owns every other piece of transport.
@@ -16688,6 +16717,32 @@ var CityOps = (function () {
     return (TOKEN_NAMED_RE.test(b) && TOKEN_BAD_RE.test(b)) ? 'dead' : 'transient';
   }
 
+  // CLEARING A CREDENTIAL IS NOT AN EDIT LIKE THE OTHERS.
+  //
+  // Every other local change can afford to fail quietly, because the retry
+  // story is "local stays newer than the server, so the next pull's reconcile
+  // pushes it" and the worst case is a late sync. A cleared key is different in
+  // two ways. The account still holds the old value, so the thing the traveler
+  // meant to revoke is still out there. And the reason people clear it is
+  // usually to change which key a run spends, so "it will sync eventually" is
+  // an answer to a question nobody asked.
+  //
+  // landed: true when the account took the clear, false when the push failed,
+  // null when there was nothing to push because this device is signed out.
+  function keyClearText(landed) {
+    if (landed === null || landed === undefined) {
+      return 'Key cleared on this device.';
+    }
+    if (landed) {
+      return 'Key cleared on this device and on your account.';
+    }
+    // Named plainly, because the recovery is not obvious and the failure is
+    // invisible: nothing looks wrong until another device signs in.
+    return 'Key cleared on this device, but your account still has the old one. ' +
+      'It will clear the next time this device syncs. Until then, signing in ' +
+      'somewhere else can bring the old key back.';
+  }
+
   function buildRows(field, entries) {
     var rows = [];
     (entries || []).forEach(function (e) {
@@ -20294,6 +20349,9 @@ var CityOps = (function () {
       // carrying one, so it can push the cleaned row.
       legacyGithubSidecar: legacyGithubSidecar,
       refreshFailure: refreshFailure,
+      // What Profile says after Clear key, which depends on whether the ACCOUNT
+      // took the clear and not just this device.
+      keyClearText: keyClearText,
       // Removal tombstones: a removed city stays removed, on every device.
       // All pure, all unit tested; the shell owns the DELETE calls and the
       // localStorage key, exactly as it owns every other piece of transport.
@@ -22541,8 +22599,16 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     keyClear.type = 'button';
     keyClear.onclick = function () {
       keyInp.value = '';
-      if (loadApiKey()) saveApiKey('');
-      keyMsg.textContent = keyStatusText();
+      if (!loadApiKey()) { keyMsg.textContent = keyStatusText(); return; }
+      saveApiKey('');
+      // Clearing a key is the one local edit whose silent failure is dangerous:
+      // the account keeps the old value, and the next device to sign in can
+      // hand it straight back. So it does not wait out the 2s debounce, and it
+      // says which of the two things actually happened.
+      keyMsg.textContent = 'Clearing...';
+      flushPendingPush().then(function (landed) {
+        keyMsg.textContent = CityOps.syncKit.keyClearText(landed);
+      });
     };
     keyRow.appendChild(keyClear);
     m.box.appendChild(keyRow);
@@ -24815,18 +24881,22 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // Claude key and the Add/Edit form metadata as stamped sidecars, each
   // reconciled on its own stamp; row.updated_at stays the PROFILE's stamp so a
   // key change cannot make a stale profile win.
+  // Resolves TRUE only when the account actually took the row, FALSE when the
+  // push was refused or failed, and NULL when there was nothing to push (signed
+  // out, or this device has never set anything). Callers that are only queueing
+  // an edit can ignore the answer, exactly as they always have; Clear key reads
+  // it, because "cleared" and "cleared everywhere" are different promises.
   function pushProfileNow() {
-    if (!syncOn() || !session || profileTableMissing) return;
-    if (!entAllows()) { entGateOnce('sync'); return; }
+    if (!syncOn() || !session || profileTableMissing) return Promise.resolve(null);
+    if (!entAllows()) { entGateOnce('sync'); return Promise.resolve(false); }
     if (!sidecarsKnown) {
-      profilePreflight().then(function (ok) { if (ok) pushProfileRow(); });
-      return;
+      return profilePreflight().then(function (ok) { return ok ? pushProfileRow() : false; });
     }
-    pushProfileRow();
+    return pushProfileRow();
   }
 
   function pushProfileRow() {
-    if (!syncOn() || !session || profileTableMissing) return;
+    if (!syncOn() || !session || profileTableMissing) return Promise.resolve(null);
     var row = CityOps.syncKit.buildProfileRow(store.profile, localSidecars());
     // Nothing this device has ever set: pushing an empty profile with no
     // sidecars would overwrite a real one with this device's blank.
@@ -24838,16 +24908,16 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     // other device pushes the city straight back. Caught in the mocked
     // remove-then-pull walkthrough, 2026-08-27.
     if (!row.data.updated && !row.data.apiKey && !row.data.github &&
-        !row.data.genmeta && !row.data.removed) return;
-    api('/rest/v1/profile?on_conflict=user_id', {
+        !row.data.genmeta && !row.data.removed) return Promise.resolve(null);
+    return api('/rest/v1/profile?on_conflict=user_id', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       },
       body: JSON.stringify([row])
-    }).then(function () { stampSync(); noteSyncWorking(); })
-      .catch(function (e) { noteProfileTable(e); warn('push profile failed', e); });
+    }).then(function () { stampSync(); noteSyncWorking(); return true; })
+      .catch(function (e) { noteProfileTable(e); warn('push profile failed', e); return false; });
   }
 
   // The profile table is a Phase 3a addition: a build can be running against a
@@ -24902,7 +24972,10 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     pushQueueState = {};
     pushNow('data', dataEntries);
     pushNow('state', stateEntries);
-    if (pushQueueProfile) { pushQueueProfile = false; pushProfileNow(); }
+    // The profile answer is returned so a caller who needs to KNOW can wait for
+    // it. Nothing else does, and nothing else has to.
+    if (pushQueueProfile) { pushQueueProfile = false; return pushProfileNow(); }
+    return Promise.resolve(null);
   }
 
   // Fires the debounced push immediately instead of waiting out the 2s timer:
@@ -24910,10 +24983,10 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // never flushes is an edit that never syncs. Same guards schedulePush uses,
   // since this only matters when a debounce could actually be pending.
   function flushPendingPush() {
-    if (!syncOn() || !session || !pushTimer) return;
+    if (!syncOn() || !session || !pushTimer) return Promise.resolve(null);
     clearTimeout(pushTimer);
     pushTimer = null;
-    flushPush();
+    return flushPush();
   }
 
   // Chained onto the engine's state-change hook. A push fires only when the
@@ -25248,6 +25321,15 @@ only judges it. `ratings` may be omitted when you could not verify the place;
 
   function signOut() {
     var tok = session && session.access_token;
+    // FLUSH BEFORE TEARING DOWN, and before the token is thrown away.
+    //
+    // The three lines below used to empty the push queues and cancel the 2s
+    // debounce outright, so anything edited in the last two seconds left with
+    // the session and the account never heard about it. Every other exit from
+    // the app already flushes (see flushPendingPush, wired to hidden and
+    // unload); sign-out was the one door that did not, and it is the door most
+    // likely to be used right after changing a credential.
+    flushPendingPush();
     if (tok) {
       // Best effort revoke. The local session is cleared either way, so the
       // button can never leave the user half signed out.
