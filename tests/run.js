@@ -6227,6 +6227,97 @@ test('the Enrich modal offers one chooser and one row of buttons', () => {
   assert.ok(/interests' && profileEmpty/.test(modal), 'the profile gate moved off the interests pass');
 });
 
+// ---- refusing a chat transcript that validates as a guide (2026-09-06) ----
+
+// The shape Rob's Ohrid actually arrived in: a Claude planning thread whose
+// markdown headings became sections. It satisfied schema v1 in every respect,
+// so it saved and synced, and the traveler then spent two days looking at an
+// empty Eat and Drink tab.
+const TRANSCRIPT_CITY = {
+  schema: 1,
+  city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+  sections: [
+    { id: 'dinner', label: 'Dinner', icon: 'x' },
+    { id: 'lunch', label: 'Lunch', icon: 'x' },
+    { id: 'coffee', label: 'Coffee', icon: 'x' },
+    { id: 'services', label: 'Services', icon: 'x' },
+    { id: 'practical', label: 'Practical', icon: 'x' },
+    { id: 'about-rob', label: 'About Rob', icon: 'x' },
+    { id: 'rob-s-working-style', label: "Rob's working style", icon: 'x' },
+    { id: 'related-past-chats', label: 'Related past chats', icon: 'x' },
+    { id: 'what-s-open-to-work-on-in-this-thread', label: "What's open / to work on in this thread", icon: 'x' },
+    { id: 'decisions-made', label: 'Decisions made', icon: 'x' }
+  ],
+  items: []
+};
+['about-rob', 'rob-s-working-style', 'related-past-chats',
+ 'what-s-open-to-work-on-in-this-thread', 'decisions-made'].forEach(function (sec, si) {
+  for (let i = 0; i < 3; i++) {
+    TRANSCRIPT_CITY.items.push({ id: sec + '-' + i, section: sec, status: 'plan',
+      name: 'Paragraph ' + si + '.' + i, links: [], place_id: null, verified: null });
+  }
+});
+TRANSCRIPT_CITY.items.push({ id: 'one-real-note', section: 'practical', status: 'plan',
+  name: 'Bolt works here', links: [], place_id: null, verified: null });
+
+test('a chat transcript is refused even though it satisfies the schema', () => {
+  // It really does validate: that is the whole problem.
+  assert.deepEqual(C.validate(TRANSCRIPT_CITY), [],
+    'the fixture must be schema-valid, or this test proves nothing');
+  const r = C.intakeKit.read(JSON.stringify(TRANSCRIPT_CITY), { mode: 'city' });
+  assert.equal(r.ok, false, 'a chat transcript was accepted as a city guide');
+  assert.equal(r.transcript, true);
+  assert.ok(/chat about a trip/.test(r.message));
+  // It says WHY, in the traveler's terms, not in schema grammar.
+  assert.ok(r.errors.length >= 2, 'refused without giving its reasons');
+  assert.ok(/conversation/.test(r.message), 'never names the conversation sections');
+  assert.ok(/declared but empty|outside the sections/.test(r.message));
+  // Never a dead end.
+  assert.ok(/PROMPT\.md|Generate with Claude/.test(r.message));
+});
+
+test('a thin but real guide is not mistaken for a transcript', () => {
+  // The false positive that would matter: a small guide, early in a trip,
+  // with only a couple of places in it. One signal is not enough to refuse.
+  const thin = {
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [
+      { id: 'dinner', label: 'Dinner', icon: 'x' },
+      { id: 'coffee', label: 'Coffee', icon: 'x' },
+      { id: 'practical', label: 'Practical', icon: 'x' }
+    ],
+    items: [
+      { id: 'a', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha', links: [], place_id: null, verified: null },
+      { id: 'b', section: 'coffee', status: 'plan', name: 'Lakefront cafe', links: [], place_id: null, verified: null },
+      { id: 'c', section: 'practical', status: 'plan', name: 'Cash and cards', links: [], place_id: null, verified: null }
+    ]
+  };
+  assert.deepEqual(C.transcriptReasons(thin), [], 'a thin real guide tripped the guard');
+  assert.equal(C.intakeKit.read(JSON.stringify(thin), { mode: 'city' }).ok, true);
+
+  // And one signal alone never refuses: a guide that happens to carry a
+  // "Decisions made" section is odd, not a transcript.
+  const oneSignal = JSON.parse(JSON.stringify(thin));
+  oneSignal.sections.push({ id: 'decisions-made', label: 'Decisions made', icon: 'x' });
+  oneSignal.items.push({ id: 'd', section: 'decisions-made', status: 'plan', name: 'Booked the boat', links: [], place_id: null, verified: null });
+  assert.ok(C.transcriptReasons(oneSignal).length < 2, 'one odd section is enough to refuse');
+  assert.equal(C.intakeKit.read(JSON.stringify(oneSignal), { mode: 'city' }).ok, true);
+});
+
+test('the transcript guard only guards the box that replaces a city', () => {
+  // A delta cannot replace a guide, and mergeDelta refuses what it does not
+  // understand anyway, so a strange top-up costs nothing and is left alone.
+  const asDelta = JSON.parse(JSON.stringify(TRANSCRIPT_CITY));
+  asDelta.delta = true;
+  const existing = {
+    schema: 1, city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }], items: []
+  };
+  const r = C.intakeKit.read(JSON.stringify(asDelta), { mode: 'delta', existing: existing });
+  assert.notEqual(r.transcript, true, 'the guard fired on a delta');
+});
+
 test('a whole guide pasted into the top-up box is named, not graded', () => {
   // Rob, 2026-09-06: ran the full generation prompt, pasted the result into
   // Enrich, and got "delta must be true: this is a partial payload, not a

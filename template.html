@@ -4595,6 +4595,75 @@ var CityOps = (function () {
   // On success `tolerant` says whether anything beyond a clean JSON.parse was
   // needed; the shells preview before committing when it is true, so the
   // path that has always worked keeps behaving exactly as it did.
+  // ---- Is this a city guide, or somebody's chat about one? (2026-09-06) ----
+  //
+  // Ohrid arrived as 20 sections, 12 of them conversation headings
+  // ("Related past chats", "What's open / to work on in this thread",
+  // "About Rob", "Decisions made"). dinner, lunch, coffee and services existed
+  // but held zero items, nothing carried a date, and the country read NOR.
+  // A Claude planning THREAD had been pasted in where a guide belongs.
+  //
+  // It validated. Schema v1 asks for a name, sections and well-formed items,
+  // and a transcript converted to markdown satisfies all three. So it saved,
+  // it synced, and the traveler spent days looking at a Plan tab that was
+  // empty for reasons the app had all the information to explain and never
+  // did. That silence is the bug; the intake being tolerant is not.
+  //
+  // Pure and structural: no wording of any specific guide is hardcoded beyond
+  // the vocabulary a conversation uses about itself.
+  var GUIDE_CORE_SECTIONS = ['dinner', 'breakfast', 'lunch', 'coffee', 'cowork',
+    'activities', 'services', 'practical'];
+  // What a conversation calls its own parts. A city guide has no reason to
+  // name a section after a thread, a chat, or a decision that was made.
+  var TRANSCRIPT_RE = /(this thread|past chat|related chat|previous chat|decisions made|working style|what'?s (open|booked|next)|to work on|conversation|transcript|about (me|rob|the user))/;
+
+  // Returns the reasons this looks like a transcript. Empty means it reads as
+  // a guide. Two or more reasons is the bar for refusing, because any single
+  // one has an innocent explanation: a thin guide, an unusual section name, a
+  // traveler who has not dated anything yet.
+  function transcriptReasons(data) {
+    var out = [];
+    var d = data || {};
+    var sections = Array.isArray(d.sections) ? d.sections : [];
+    var items = Array.isArray(d.items) ? d.items : [];
+    if (!sections.length || !items.length) return out;
+
+    var chatty = sections.filter(function (sec) {
+      var t = (String(sec && sec.id || '') + ' ' + String(sec && sec.label || '')).toLowerCase();
+      return TRANSCRIPT_RE.test(t);
+    });
+    if (chatty.length >= 2) {
+      out.push(chatty.length + ' sections are named after parts of a conversation rather than ' +
+        'parts of a city (' + chatty.slice(0, 3).map(function (s) {
+          return '"' + trimStr(s.label || s.id) + '"';
+        }).join(', ') + ')');
+    }
+
+    // Count what sits where. A guide puts its places in the sections the
+    // contract names; a transcript puts its paragraphs everywhere else.
+    var perSection = {};
+    items.forEach(function (it) {
+      if (!it) return;
+      var k = String(it.section || '');
+      perSection[k] = (perSection[k] || 0) + 1;
+    });
+    var emptyCore = GUIDE_CORE_SECTIONS.filter(function (id) {
+      var declared = sections.some(function (sec) { return sec && sec.id === id; });
+      return declared && !perSection[id];
+    });
+    if (emptyCore.length >= 3) {
+      out.push(emptyCore.length + ' of the guide sections are declared but empty (' +
+        emptyCore.slice(0, 4).join(', ') + ')');
+    }
+    var inCore = 0;
+    GUIDE_CORE_SECTIONS.forEach(function (id) { inCore += (perSection[id] || 0); });
+    if (items.length >= 8 && inCore * 2 < items.length) {
+      out.push('most of the content (' + (items.length - inCore) + ' of ' + items.length +
+        ' items) is outside the sections a guide is made of');
+    }
+    return out;
+  }
+
   function intakeRead(text, opts) {
     opts = opts || {};
     var mode = opts.mode === 'delta' ? 'delta' : opts.mode === 'raw' ? 'raw' : 'city';
@@ -4610,6 +4679,20 @@ var CityOps = (function () {
     if (s) {
       var chk = checkPayload(s.data, mode, opts);
       if (chk.ok) {
+        // Valid is not the same as right. A whole guide that is really a chat
+        // transcript passes every schema check and then wastes days, so the
+        // one thing the intake refuses on shape rather than grammar is this.
+        // Only for `city`: a delta cannot replace a guide, so a strange delta
+        // costs a merge that mergeDelta will not honour anyway.
+        var chatty = (mode === 'city') ? transcriptReasons(s.data) : [];
+        if (chatty.length >= 2) {
+          return { ok: false, data: null, route: s.route, repairs: s.repairs, tolerant: true,
+            found: 'json', errors: chatty, convertible: false, transcript: true,
+            message: 'This looks like a chat about a trip rather than a city guide, so it is ' +
+              'refused before it replaces one:\n- ' + chatty.join('\n- ') +
+              '\nIf it really is a guide, it is missing the parts that make it one. Run ' +
+              'PROMPT.md or Generate with Claude and paste that result instead.' };
+        }
         return { ok: true, data: s.data, route: s.route, repairs: s.repairs,
           tolerant: s.route !== 'json' || s.repairs.length > 0,
           found: 'json', errors: [], stats: null,
@@ -9499,6 +9582,7 @@ var CityOps = (function () {
     // The ONE door every paste box in the product goes through. Tolerance
     // lives here and only here: what comes out still faces validate(),
     // validateItem() and mergeDelta() exactly as a hand-typed payload does.
+    transcriptReasons: transcriptReasons,
     intakeKit: {
       read: intakeRead, structured: readStructured, repair: repairCandidate,
       markdownToCity: markdownToCity, markdownToDelta: markdownToDelta,
