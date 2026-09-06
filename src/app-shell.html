@@ -2127,6 +2127,12 @@
 
     if (!aiOneTapReady()) {
       m.box.appendChild(el('p', 'diff', aiNoTransportText()));
+    } else {
+      // Which key "Ask Claude" is about to spend. This modal offered the
+      // button with no such line until 2026-09-06, so a traveler with a saved
+      // key and a paid plan had no way to tell which of the two it used.
+      var enrichLine = aiTransportLineNow();
+      if (enrichLine.show) m.box.appendChild(el('p', 'diff', enrichLine.text));
     }
     m.box.appendChild(el('p', 'diff', 'Paste what your AI returns here, JSON or markdown. It is a partial ' +
       'payload: a rating and an intel block for this one place.'));
@@ -2242,13 +2248,26 @@
   // The DECISION is CityOps.aiProxyKit.transport, which is pure and unit
   // tested. This is the adapter that reads the session and hands back the
   // request that follows from it.
-  function aiTransportNow() {
-    return CityOps.aiProxyKit.transport({
+  function aiTransportCtx() {
+    return {
       hasKey: !!loadApiKey(),
       tier: (entRow && entRow.row && entRow.row.tier) || '',
       entitled: entAllows(),
       signedIn: entMocked || !!(session && session.access_token)
-    });
+    };
+  }
+
+  function aiTransportNow() {
+    return CityOps.aiProxyKit.transport(aiTransportCtx());
+  }
+
+  // The sentence that says which key the next tap spends. Built from the SAME
+  // context object the request is built from, so the line and the run can
+  // never disagree; the wording and the meter arithmetic are in the engine.
+  function aiTransportLineNow() {
+    var ctx = aiTransportCtx();
+    ctx.usage = aiUsageRow;
+    return CityOps.aiProxyKit.transportLine(ctx);
   }
 
   // True when one tap can actually run. The copy-a-prompt path is always there
@@ -2721,15 +2740,18 @@
 
     function drawGenAffordance() {
       var oneTap = aiOneTapReady();
-      var onOurKey = aiTransportNow() === 'proxy';
       // A lapsed account and a keyless one are refused for different reasons,
       // and telling a lapsed subscriber to "add an API key" would send them off
       // to solve a problem they do not have.
       var lapsed = !entAllows();
-      genLine.textContent = onOurKey
-        ? 'Generate with Claude runs the same prompt on our key, right here, and adds the result to your cities when it finishes. Your plan includes about 12 cities of research a month.'
-        : oneTap
-        ? 'Generate with Claude runs the same prompt against your own Claude API key, right here, and adds the result to your cities when it finishes.'
+      // The action, then which key pays for it, from the engine so this modal
+      // and the Enrich modal say the same thing in the same words. The static
+      // "about 12 cities a month" that used to sit here was a guess printed as
+      // a fact: it never moved, whatever the month had actually spent.
+      var line = aiTransportLineNow();
+      genLine.textContent = oneTap
+        ? 'Generate with Claude runs the same prompt right here and adds the result to your cities ' +
+          'when it finishes. ' + (line.show ? line.text : '')
         : lapsed
         ? entGateText('ai')
         : 'Generate with Claude needs an API key first. Add one in Profile (top of the app): it is stored on ' +
@@ -2760,6 +2782,14 @@
     // at a disabled Generate on the feature they bought.
     fetchEntitlement().then(function () {
       if (!genAbort) { setGenerating(false); drawGenAffordance(); }
+      // The meter follows the plan read, because whether there is an allowance
+      // to report at all is a question only the tier can answer. It is what
+      // turns "included in your plan" into a number, so the line is drawn
+      // twice on purpose: once the moment the button is usable, and again when
+      // the count arrives.
+      return fetchAiUsage();
+    }).then(function () {
+      if (!genAbort) drawGenAffordance();
     });
 
     function setGenerateRow(extraButtons) {
