@@ -502,6 +502,52 @@ Deno.test("cancelling stops the upstream and still records what was produced", a
   scripted.upstream = beforeUpstream;
 });
 
+Deno.test("the worker is told to stay alive for the whole stream", async () => {
+  reset();
+  // 2026-09-06. Supabase retires a worker as soon as it looks idle, and idle
+  // means "the response has been returned and no EdgeRuntime.waitUntil promise
+  // is outstanding". This function returned a stream and registered no
+  // waitUntil, so the worker could be reclaimed before a single chunk moved.
+  //
+  // What that looked like in production: a managed run reserved 32,000 tokens,
+  // returned 200 in 1.4 seconds, recorded zero input and zero output tokens,
+  // and never called ai_finish, so the reservation stayed held until the stale
+  // sweep charged it in full. The traveler got nothing.
+  const held: Array<Promise<unknown>> = [];
+  (globalThis as any).EdgeRuntime = { waitUntil: (p: Promise<unknown>) => { held.push(p); } };
+  try {
+    scripted.upstream = () =>
+      sse([
+        { type: "message_start", message: { usage: { input_tokens: 700, output_tokens: 0 } } },
+        { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } },
+        { type: "message_delta", usage: { output_tokens: 42 } },
+      ]);
+    const res = await post(GOOD_BODY);
+    assertEquals(res.status, 200);
+
+    // The registration is the fix. Without it the worker is free to go the
+    // instant this response is handed back.
+    assertEquals(held.length, 1, "nothing was registered with waitUntil; the worker can be retired mid-stream");
+
+    // And the bytes still arrive, unchanged, which is the thing the pipe must
+    // not break while keeping the worker alive.
+    const text = await res.text();
+    assert(text.includes("hello"), "the stream stopped passing bytes through");
+
+    // The promise handed to waitUntil is the one that settles the call, so a
+    // supervisor honouring it cannot reclaim the worker before ai_finish runs.
+    await held[0];
+    const finish = rpcCalls.filter((c) => c.name === "ai_finish")[0];
+    assert(finish, "the call never settled, so the reservation would stay held");
+    assertEquals(finish.args.call_status, "done");
+    // Usage sniffed off the same bytes on the way past, as before.
+    assertEquals(finish.args.input_tokens, 700);
+    assertEquals(finish.args.output_tokens, 42);
+  } finally {
+    delete (globalThis as any).EdgeRuntime;
+  }
+});
+
 Deno.test("an upstream failure is closed out and told plainly", async () => {
   reset();
   scripted.upstream = () =>
