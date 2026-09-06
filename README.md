@@ -2,7 +2,7 @@
 
 **A living city guide you operate, not just read.**
 
-[![tests](https://github.com/robriggs3/cityops/actions/workflows/test.yml/badge.svg)](https://github.com/robriggs3/cityops/actions/workflows/test.yml)
+[![tests](https://github.com/robriggs3/nomadding-app/actions/workflows/test.yml/badge.svg)](https://github.com/robriggs3/nomadding-app/actions/workflows/test.yml)
 ![zero dependencies](https://img.shields.io/badge/dependencies-0-2d7d34)
 ![no build step](https://img.shields.io/badge/build%20step-none-2d7d34)
 [![license](https://img.shields.io/badge/license-MIT-2c5d8a)](LICENSE)
