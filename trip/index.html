@@ -58,7 +58,7 @@
     --shadow: 0 2px 8px rgba(0,0,0,.10);
     --shadow-lg: 0 4px 16px rgba(0,0,0,.12);
 
-    /* Spacing scale — the values already in use throughout this file (a 4px
+    /* Spacing scale: the values already in use throughout this file (a 4px
        rhythm: 4/8/12/16/20/24/32/40/60), named so new rules can reach for a
        token instead of another one-off number. Existing rules that already use
        these exact pixel values are left as-is (a mechanical find/replace across
@@ -73,7 +73,7 @@
     --space-7: 32px;
     --space-8: 40px;
 
-    /* Type scale — three families already in consistent use (Fraunces for
+    /* Type scale: three families already in consistent use (Fraunces for
        headings/large numerals, Inter for body/inputs, JetBrains Mono for
        labels/meta/data). Named sizes for the recurring roles. */
     --fs-meta: 11px;      /* JetBrains Mono uppercase labels */
@@ -257,7 +257,7 @@
   .counter-breakdown .item .name { color: var(--text-2); }
   .counter-breakdown .item .num { font-family: 'JetBrains Mono', monospace; color: var(--text-3); font-size: 11px; }
 
-  /* Budget projection card — three rolling-window rows aligned in columns */
+  /* Budget projection card: three rolling-window rows aligned in columns */
   .budget-projection-card { min-width: 280px; }
   .budget-period-rows {
     display: flex; flex-direction: column; gap: 8px; margin-top: 4px;
@@ -517,7 +517,7 @@
     display: inline-flex; gap: 8px; align-items: center; margin-left: auto;
     flex-shrink: 0;
   }
-  /* Legacy aliases — both accom-section and transit-section now use .city-block too,
+  /* Legacy aliases, both accom-section and transit-section now use .city-block too,
      so these are kept for any external references but no longer carry standalone styles. */
   .accom-section, .transit-section { /* now styled via .city-block */ }
   /* Uncovered nights warning */
@@ -604,7 +604,7 @@
     padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px dashed var(--border-light);
   }
   .transit-summary:hover { color: var(--text); }
-  /* When collapsed (no .open class), the summary is the entire content — drop the divider line */
+  /* When collapsed (no .open class), the summary is the entire content, drop the divider line */
   .transit-item:not(.open) .transit-summary {
     padding-bottom: 0; margin-bottom: 0; border-bottom: none;
   }
@@ -658,7 +658,7 @@
   .accom-row1 {
     display: grid; grid-template-columns: 1fr auto auto auto auto auto; gap: 12px; align-items: center;
   }
-  /* Date range on a stay header — mirrors the leg's right-aligned date placement */
+  /* Date range on a stay header, mirrors the leg's right-aligned date placement */
   .accom-summary-date {
     font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-3);
     letter-spacing: 0.02em; white-space: nowrap; text-align: right;
@@ -1315,7 +1315,7 @@
     .sec-toggle { min-height: 44px; }
     /* Keep a destructive control from sitting flush against its neighbour. */
     .idea-actions .icon-btn.delete, .accom-actions .icon-btn.delete { margin-left: 6px; }
-    /* Score badge opens the scoring modal but measured ~21px tall — same fix
+    /* Score badge opens the scoring modal but measured ~21px tall, same fix
        as the other pill-shaped controls above. */
     .score-badge { min-height: 36px; padding: 8px 12px; }
   }
@@ -1746,21 +1746,21 @@
        hidden until that runs so it never flashes as an empty bar. -->
   <nav class="secnav" id="tripnav" aria-label="Jump to section" hidden></nav>
 
-  <!-- TRAVEL PLANS — Now/Next/After tile + warnings -->
+  <!-- TRAVEL PLANS, Now/Next/After tile + warnings -->
   <section class="section">
     <div class="section-head">
       <h2>Travel plans</h2>
-      <div class="meta" id="now-meta">—</div>
+      <div class="meta" id="now-meta">-</div>
     </div>
     <div id="now-now"></div>
     <div class="warnings" id="now-warnings"></div>
   </section>
 
-  <!-- WHERE YOU ARE — elevated current city card. Hidden if no city overlaps today. -->
+  <!-- WHERE YOU ARE, elevated current city card. Hidden if no city overlaps today. -->
   <section class="section" id="where-you-are-section" style="display:none">
     <div class="section-head">
       <h2>Where you are</h2>
-      <div class="meta" id="where-meta">—</div>
+      <div class="meta" id="where-meta">-</div>
     </div>
     <div id="now-current-city"></div>
   </section>
@@ -1777,18 +1777,18 @@
           <option value="now-90">Next 90 days</option>
           <option value="2026">2026</option>
           <option value="2027">2027</option>
-          <option value="2026-q3">Q3 2026 (Jul–Sep)</option>
-          <option value="2026-q4">Q4 2026 (Oct–Dec)</option>
-          <option value="2027-q1">Q1 2027 (Jan–Mar)</option>
-          <option value="2027-q2">Q2 2027 (Apr–Jun)</option>
-          <option value="2027-q3">Q3 2027 (Jul–Sep)</option>
-          <option value="2027-q4">Q4 2027 (Oct–Dec)</option>
+          <option value="2026-q3">Q3 2026 (Jul-Sep)</option>
+          <option value="2026-q4">Q4 2026 (Oct-Dec)</option>
+          <option value="2027-q1">Q1 2027 (Jan-Mar)</option>
+          <option value="2027-q2">Q2 2027 (Apr-Jun)</option>
+          <option value="2027-q3">Q3 2027 (Jul-Sep)</option>
+          <option value="2027-q4">Q4 2027 (Oct-Dec)</option>
           <option value="custom">Custom…</option>
         </select>
         <input class="date-input" type="date" id="map-from" style="display:none" onchange="onMapDateChange()">
         <input class="date-input" type="date" id="map-to" style="display:none" onchange="onMapDateChange()">
       </div>
-      <div class="meta" id="map-meta">—</div>
+      <div class="meta" id="map-meta">-</div>
     </div>
     <div class="map-container">
       <div id="map" style="width:100%;height:100%"></div>
@@ -1829,7 +1829,7 @@
         </div>
         <button class="btn-secondary" onclick="openBatchScoreModalForCities()" title="Score all cities in one batched API call (token-efficient)">⚡ Score all</button>
       </div>
-      <div class="meta" id="itinerary-meta">—</div>
+      <div class="meta" id="itinerary-meta">-</div>
     </div>
 
     <div class="filter-pills" id="status-filters" style="margin-bottom:8px"></div>
@@ -1860,7 +1860,7 @@
   <section class="section">
     <div class="section-head">
       <h2>Ideas</h2>
-      <div class="meta" id="ideas-meta">—</div>
+      <div class="meta" id="ideas-meta">-</div>
     </div>
 
     <div class="idea-add-row">
@@ -1885,7 +1885,7 @@
   <section class="section" id="past-travel-section" style="display:none">
     <div class="section-head">
       <h2>Past travel</h2>
-      <div class="meta" id="past-meta">—</div>
+      <div class="meta" id="past-meta">-</div>
     </div>
     <div class="muted" style="margin-bottom:10px">Completed stays. Still counted in day totals (Schengen, FEIE, country).</div>
     <div class="past-flat-list" id="past-list-flat"></div>
@@ -1960,7 +1960,7 @@
           <button class="btn-secondary" onclick="toggleSnapshots()">Snapshots</button>
           <button class="btn-secondary danger" onclick="resetAll()">Reset everything</button>
         </div>
-        <div id="data-status" class="muted" style="margin-top:10px;min-height:18px">Auto-saved continuously to your browser. Export regularly — browser data can be wiped.</div>
+        <div id="data-status" class="muted" style="margin-top:10px;min-height:18px">Auto-saved continuously to your browser. Export regularly: browser data can be wiped.</div>
         <div id="backup-freshness" style="margin-top:6px;font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em"></div>
         <div id="snapshots-block" style="display:none;margin-top:14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap">
@@ -2124,9 +2124,9 @@
 <div class="modal-bg" id="notes-modal-bg" onclick="if(event.target===this)closeNotesImport()">
   <div class="modal" style="max-width:780px">
     <h3>Import from notes</h3>
-    <div class="modal-sub">Paste any text — a conversation, planning doc, brain dump. AI will extract destinations, dates, neighborhoods, restaurants, and more. Adds to your existing data (does not replace).</div>
+    <div class="modal-sub">Paste any text: a conversation, planning doc, brain dump. AI will extract destinations, dates, neighborhoods, restaurants, and more. Adds to your existing data (does not replace).</div>
 
-    <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 1 — Your notes</label>
+    <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 1: Your notes</label>
     <textarea class="modal-textarea" id="notes-input" placeholder="Paste anything: chat history, trip notes, an article about a city you like…" style="min-height:180px"></textarea>
 
     <div id="notes-actions-1" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
@@ -2137,7 +2137,7 @@
     <div id="notes-status" style="margin-top:10px;font-size:13px;min-height:18px;color:var(--text-3)"></div>
 
     <div id="notes-step2" style="margin-top:16px;display:none">
-      <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 2 — AI's JSON response</label>
+      <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 2: AI's JSON response</label>
       <textarea class="modal-textarea" id="notes-json" placeholder="Paste the AI's reply here, code fence and all, then click Preview"></textarea>
       <div style="margin-top:8px;display:flex;gap:8px">
         <button class="btn-secondary" onclick="previewNotesImport()">Preview destinations</button>
@@ -2145,7 +2145,7 @@
     </div>
 
     <div id="notes-preview" style="margin-top:16px;display:none">
-      <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 3 — Preview</label>
+      <label style="font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-3);margin-bottom:6px;display:block">Step 3: Preview</label>
       <div id="notes-preview-content" style="background:var(--bg-softer);padding:12px 14px;border-radius:8px;font-size:13px;max-height:240px;overflow-y:auto"></div>
     </div>
 
@@ -11347,7 +11347,7 @@ const TODAY = new Date().toISOString().slice(0,10);
 var TRAVELER = 'They';
 
 function fmtDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const d = new Date(iso + 'T12:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -11548,7 +11548,7 @@ function buildStayRow(a, isCurrentCity) {
   return '<div class="' + cls + '"><div class="accom-name">' + nameBit + '</div>' + metaBit + '</div>';
 }
 
-// Sort a mixed list of stays + legs into one chronological timeline — IDENTICAL logic to the
+// Sort a mixed list of stays + legs into one chronological timeline. IDENTICAL logic to the
 // admin app's buildStayAndTravel comparator, so the family view matches what Rob sees.
 function stayTravelSort(entries, parentCityName) {
   const parent = (parentCityName || '').trim().toLowerCase();
@@ -11640,7 +11640,7 @@ function render() {
       : '';
     cs.innerHTML = '<div class="current-banner"><div class="you-are-here-badge">● ' + escapeHTML(TRAVELER) + ' is here</div><h2>' + escapeHTML(current.name) + '<span class="country">' + escapeHTML(current.country) + (current.state ? ' · ' + escapeHTML(current.state) : '') + '</span></h2><div class="dates">' + fmtDate(current.checkIn) + ' → ' + fmtDate(current.checkOut) + '<span class="days-left">' + daysLeft + ' day' + (daysLeft===1?'':'s') + ' left</span>' + cityGuideLink(current) + '</div>' + timelineHTML + '</div>';
   } else {
-    cs.innerHTML = '<div class="current-banner" style="border-color:var(--border);box-shadow:var(--shadow-sm);padding-top:24px"><div style="text-align:center;color:var(--text-3);font-style:italic;font-family:Fraunces,serif;font-size:18px">Between stays — see upcoming below</div></div>';
+    cs.innerHTML = '<div class="current-banner" style="border-color:var(--border);box-shadow:var(--shadow-sm);padding-top:24px"><div style="text-align:center;color:var(--text-3);font-style:italic;font-family:Fraunces,serif;font-size:18px">Between stays, see upcoming below</div></div>';
   }
 
   document.getElementById('map-legend').innerHTML =
@@ -11999,11 +11999,11 @@ boot();
 'use strict';
 
 const STORAGE_KEY = 'planahead:v1';
-// Build stamp — bump when shipping. Shown in the footer + logged to console so you can
+// Build stamp: bump when shipping. Shown in the footer + logged to console so you can
 // confirm at a glance which code your browser is actually running (rules out stale cache).
 const BUILD = '2026.08.28-trip4';
 const SNAPSHOTS_KEY = 'planahead:v1:snapshots';
-const MAX_AUTO_SNAPSHOTS = 7;    // daily auto rolling — about a week
+const MAX_AUTO_SNAPSHOTS = 7;    // daily auto rolling, about a week
 const MAX_MANUAL_SNAPSHOTS = 10; // generous cap for user snapshots
 
 // ==================== CONSTANTS ====================
@@ -12015,7 +12015,7 @@ const SCHENGEN_COUNTRIES = [
   'Slovakia','Slovenia','Spain','Sweden','Switzerland'
 ];
 
-// Countries list — Schengen first, then common nomad countries, then everywhere
+// Countries list: Schengen first, then common nomad countries, then everywhere
 const ALL_COUNTRIES = [
   ...SCHENGEN_COUNTRIES,
   'Albania','Argentina','Armenia','Australia','Bahamas','Bali','Bolivia','Bosnia and Herzegovina',
@@ -12036,7 +12036,7 @@ const US_STATES = [
   'PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'
 ];
 
-// Built-in city coordinates — instant lookup with no network. Covers common nomad destinations
+// Built-in city coordinates: instant lookup with no network. Covers common nomad destinations
 // and cities discussed in our planning. Format: "name|country" (lowercase) → [lat, lng]
 const CITY_COORDS = {
   // Spain
@@ -12142,13 +12142,13 @@ const DEFAULT_PROFILE = `## What I look for
 - Plenty to do plus chill time; beach a plus
 - Walkable; airport for entry/exit, train ideal in-city, bus tertiary
 - Affordable lodging and daily living
-- Climate target: 22–27°C, OK with cooler mornings; not cold, not 30°C+ humid
+- Climate target: 22-27°C, OK with cooler mornings; not cold, not 30°C+ humid
 - Cultural attractions; ideally somewhere new
 - Coworking access (WeWork or comparable); 50+ Mbps wifi non-negotiable
 - Easy US-passport visa entry; English + decent Spanish
 
 ## How I travel
-- 1–3 months per destination
+- 1-3 months per destination
 - US base: Florida domicile, car/storage in Atlanta
 - Pursuing FEIE qualification (330+ days outside US per rolling 12 months)
 - Tracking Schengen 90/180 carefully
@@ -12156,9 +12156,9 @@ const DEFAULT_PROFILE = `## What I look for
 
 ## Working style abroad
 - Real desk + reliable wifi (50+ Mbps down, 10+ up minimum)
-- Coworking 2–3 days/week, apartment work other days
+- Coworking 2-3 days/week, apartment work other days
 - Webinars/video calls require quiet, stable connection
-- Lead two companies — need professional environment
+- Lead two companies, so needs a professional environment
 
 ## What I avoid
 - Heavily Americanized tourist zones
@@ -12452,9 +12452,9 @@ function saveState() {
       }
     } catch (e3) { console.error('Snapshot prune during save recovery failed:', e3); }
     if (recovered) {
-      toast('Storage was full — cleared old auto-snapshots to save your changes. Export a backup soon (Settings → Export).', 'ok');
+      toast('Storage was full, so old auto-snapshots were cleared to save your changes. Export a backup soon (Settings → Export).', 'ok');
     } else {
-      toast('⚠ COULD NOT SAVE — browser storage is full. Export your data now (Settings → Export) before refreshing, or recent edits will be lost.', 'error');
+      toast('⚠ COULD NOT SAVE. Browser storage is full. Export your data now (Settings → Export) before refreshing, or recent edits will be lost.', 'error');
       return; // do NOT call showSaved(): we must not signal "saved" when it failed
     }
   }
@@ -12501,7 +12501,7 @@ function saveSnapshotsArray(snaps) {
   try {
     localStorage.setItem(SNAPSHOTS_KEY, JSON.stringify(snaps));
   } catch(e) {
-    toast('Could not save snapshot — localStorage may be full. Export and delete old snapshots.', 'error');
+    toast('Could not save snapshot: localStorage may be full. Export and delete old snapshots.', 'error');
   }
 }
 
@@ -12641,14 +12641,14 @@ function parseDate(s) {
 }
 
 function fmtDate(s) {
-  if (!s) return '—';
+  if (!s) return '-';
   const d = parseDate(s);
-  if (!d) return '—';
+  if (!d) return '-';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function fmtDateShort(s) {
-  if (!s) return '—';
+  if (!s) return '-';
   const d = parseDate(s);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
@@ -12675,7 +12675,7 @@ function isUS(country) {
 }
 
 function fmtCurrency(amount, currency) {
-  if (amount == null || amount === '') return '—';
+  if (amount == null || amount === '') return '-';
   const cur = currency || 'USD';
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(amount);
@@ -12733,19 +12733,19 @@ function cityNights(city) {
   return nightsBetween(city.checkIn, city.checkOut);
 }
 
-// Detect "homeless nights" — nights within a city's stay not covered by ANY booked
+// Detect "homeless nights", nights within a city's stay not covered by ANY booked
 // accommodation OR overnight booked transit, regardless of which city those belong to.
 // Returns array of ISO date strings.
 // Why global: city date ranges can overlap (e.g. you're "in" Essaouira until Aug 1 but
 // already checked into Mindelo on Jul 31). What matters for homelessness is whether you
 // have a bed somewhere that night, not whether that bed is filed under the right city.
-// Only considers BOOKED items — shortlisted/tentative don't count as confirmed shelter.
+// Only considers BOOKED items, shortlisted/tentative don't count as confirmed shelter.
 function uncoveredNights(city) {
   if (!city.checkIn || !city.checkOut) return [];
   const covered = new Set();
 
   // Mark dates covered by booked accommodations ACROSS ALL CITIES
-  // (not just this city — see comment above for rationale)
+  // (not just this city, see comment above for rationale)
   (state.cities || []).forEach(c => {
     (c.accommodations || []).forEach(a => {
       if (a.status !== 'booked' || !a.checkIn || !a.checkOut) return;
@@ -12758,7 +12758,7 @@ function uncoveredNights(city) {
     });
   });
 
-  // Mark dates covered by ANY booked overnight transit — outgoing, incoming, or
+  // Mark dates covered by ANY booked overnight transit, outgoing, incoming, or
   // unrelated. The calendar night between departureDate and arrivalDate is global coverage.
   (state.transitions || []).forEach(t => {
     if (t.status !== 'booked') return;
@@ -13094,7 +13094,7 @@ function updateCityChip() {
 }
 
 // Tick the hero every 60 seconds so the displayed time stays current without a manual refresh.
-// Set once at module load — see INIT block at bottom of script.
+// Set once at module load, see INIT block at bottom of script.
 let _heroTickHandle = null;
 function startHeroTick() {
   if (_heroTickHandle) return;
@@ -13126,7 +13126,7 @@ function renderNow() {
 
   if (!current && future.length === 0) {
     container.innerHTML = '<div class="now-empty">Nothing planned yet. Add a city below to start.</div>';
-    meta.textContent = '—';
+    meta.textContent = '-';
   } else {
     // Build a flow of up to 3 cards: current + up to 2 next OR up to 3 future
     const cards = [];
@@ -13135,7 +13135,7 @@ function renderNow() {
       cards.push({
         label: 'NOW',
         name: current.name,
-        country: current.country || '—',
+        country: current.country || '-',
         dates: `${fmtDate(current.checkIn)} → ${fmtDate(current.checkOut)}`,
         sub: `${daysUntilLeaving} day${daysUntilLeaving===1?'':'s'} left`,
         emphasis: true
@@ -13144,20 +13144,20 @@ function renderNow() {
         cards.push({
           label: idx === 0 ? 'NEXT' : 'AFTER',
           name: c.name,
-          country: c.country || '—',
+          country: c.country || '-',
           dates: `${fmtDate(c.checkIn)} → ${fmtDate(c.checkOut)}`,
           sub: ''
         });
       });
       meta.textContent = `${daysUntilLeaving}d until move`;
     } else {
-      // No current city — show next 3 upcoming
+      // No current city, show next 3 upcoming
       future.slice(0, 3).forEach((c, idx) => {
         const daysUntil = Math.round((parseDate(c.checkIn) - parseDate(todayStr)) / 86400000);
         cards.push({
           label: idx === 0 ? 'NEXT' : (idx === 1 ? 'THEN' : 'AFTER'),
           name: c.name,
-          country: c.country || '—',
+          country: c.country || '-',
           dates: `${fmtDate(c.checkIn)} → ${fmtDate(c.checkOut)}`,
           sub: idx === 0 ? `in ${daysUntil} day${daysUntil===1?'':'s'}` : ''
         });
@@ -13166,7 +13166,7 @@ function renderNow() {
         const daysUntil = Math.round((parseDate(future[0].checkIn) - parseDate(todayStr)) / 86400000);
         meta.textContent = `${daysUntil}d until ${future[0].name}`;
       } else {
-        meta.textContent = '—';
+        meta.textContent = '-';
       }
     }
 
@@ -13197,7 +13197,7 @@ function renderNow() {
       } else if (totalFuture === 0) {
         msg += `No cities in your itinerary have future dates. Add one above.`;
       } else {
-        msg += `${totalFuture} future cit${totalFuture===1?'y':'ies'} found but didn't pass the date check — open the Itinerary list to inspect.`;
+        msg += `${totalFuture} future cit${totalFuture===1?'y':'ies'} found but didn't pass the date check, open the Itinerary list to inspect.`;
       }
       container.appendChild(hint);
     }
@@ -13214,7 +13214,7 @@ function renderNow() {
     if (iss.sig) {
       const sigJS = iss.sig.replace(/'/g, "\\'");
       const labelJS = (iss.label || 'this gap').replace(/'/g, "\\'");
-      html += `<button class="btn-secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap;margin-left:8px" onclick="dismissGap('${sigJS}', '${labelJS}')" title="Mark as in transit (sleeping on plane/car/etc.) — dismiss this gap alert">✓ In transit</button>`;
+      html += `<button class="btn-secondary" style="font-size:11px;padding:4px 10px;white-space:nowrap;margin-left:8px" onclick="dismissGap('${sigJS}', '${labelJS}')" title="Mark as in transit (sleeping on plane/car/etc.) to dismiss this gap alert">✓ In transit</button>`;
     }
     w.innerHTML = html;
     warnings.appendChild(w);
@@ -13227,7 +13227,7 @@ function renderNow() {
     warnings.appendChild(resetRow);
   }
 
-  // Elevated current city card — full editable card pulled out of the itinerary list
+  // Elevated current city card, full editable card pulled out of the itinerary list
   // so research (neighborhoods, restaurants, accommodation) is one scroll away while in-place
   const elevatedContainer = document.getElementById('now-current-city');
   const whereSection = document.getElementById('where-you-are-section');
@@ -13247,14 +13247,14 @@ function renderNow() {
       card.classList.add('city-elevated');
       // Remove footer buttons that don't make sense for the current location:
       // Demote (you're here, not a hypothetical) and Delete (you're literally there).
-      // Keep Duplicate — you might want a "next time I visit" stub copy.
+      // Keep Duplicate, you might want a "next time I visit" stub copy.
       card.querySelectorAll('.city-footer-actions button').forEach(btn => {
         const oc = btn.getAttribute('onclick') || '';
         if (oc.includes('demoteCity') || oc.includes('deleteCity')) btn.remove();
       });
       elevatedContainer.appendChild(card);
       // At-a-glance under a COLLAPSED card: only the legs that LEAVE this city (departing on/after
-      // its final date). Internal hops are hidden here — they show in the timeline when expanded.
+      // its final date). Internal hops are hidden here, they show in the timeline when expanded.
       if (!openCityIds.has(current.id)) {
         exitLegsForCity(current).forEach(t => elevatedContainer.appendChild(buildAdminTransitMini(t)));
       }
@@ -13422,7 +13422,7 @@ function renderCounters() {
       { label: 'Next 90 days',  days: 90 },
       { label: 'Next 12 months', days: 365 },
     ];
-    // Determine plan-coverage end-date — used to flag rows where the period extends
+    // Determine plan-coverage end-date, used to flag rows where the period extends
     // beyond planned data (variance comparison would be misleading otherwise).
     const rows = periods.map(p => {
       const windowEnd = addDaysISO(today, p.days);
@@ -13522,7 +13522,7 @@ function renderCities() {
 
   // Categorize: current vs past vs active by status vs eliminated.
   // The current city (overlapping today) is rendered in the elevated "Where you are" section,
-  // NOT in the itinerary list — keeps the list future-focused.
+  // NOT in the itinerary list, keeps the list future-focused.
   // Eliminated entries are bucketed separately and only shown when the user filters to them.
   const past = [];
   const eliminated = [];
@@ -13530,7 +13530,7 @@ function renderCities() {
   cities.forEach(c => {
     if (c.status === 'eliminated') { eliminated.push(c); return; }
     if (c.checkOut && c.checkOut < todayStr) { past.push(c); return; }
-    // Skip the current city — it lives up in "Where you are" now
+    // Skip the current city, it lives up in "Where you are" now
     if (c.checkIn && c.checkOut && c.checkIn <= todayStr && c.checkOut > todayStr) return;
     const s = c.status || 'tentative';
     if (s === 'booked') byStatus.booked.push(c);
@@ -13605,7 +13605,7 @@ function renderCities() {
     });
   }
   else if (activeFilter === 'eliminated') {
-    // Render eliminated entries as a flat list — preserved for reference, not counted toward totals
+    // Render eliminated entries as a flat list, preserved for reference, not counted toward totals
     if (eliminated.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'now-empty';
@@ -13667,7 +13667,7 @@ function renderStatusFilters() {
     if (c.status === 'eliminated') { counts.eliminated++; return; }
     if (c.checkOut && c.checkOut < todayStr) { counts.past++; counts.all++; return; }
     if (c.checkIn && c.checkOut && c.checkIn <= todayStr && c.checkOut > todayStr) {
-      // current city — counted as "current" only, NOT in active status totals (lives in Where you are)
+      // current city, counted as "current" only, NOT in active status totals (lives in Where you are)
       counts.current++;
       return;
     }
@@ -13696,7 +13696,7 @@ function renderStatusFilters() {
 }
 
 // Show cost totals broken down by status. Includes per-status accommodations PLUS
-// the global booked-transit subtotal (transit doesn't carry a city status — it's
+// the global booked-transit subtotal (transit doesn't carry a city status, it's
 // always "booked" or not, so it lives alongside the city-status buckets).
 function renderStatusCostRow() {
   const container = document.getElementById('status-cost-row');
@@ -13714,12 +13714,12 @@ function renderStatusCostRow() {
     else if (s === 'shortlisted') costs.shortlisted += cityCost;
     else costs.tentative += cityCost;
   });
-  // Booked transit total — only count legs whose city isn't in the past
+  // Booked transit total, only count legs whose city isn't in the past
   const transitTotal = (state.transitions || [])
     .filter(t => {
       if (t.status !== 'booked') return false;
       const c = state.cities.find(c => c.id === t.cityId);
-      if (!c || !c.checkOut) return true;  // city without dates — count anyway
+      if (!c || !c.checkOut) return true;  // city without dates, count anyway
       return c.checkOut >= todayStr;  // skip past cities
     })
     .reduce((sum, t) => sum + (Number(t.cost) || 0), 0);
@@ -13885,7 +13885,7 @@ function renderCityCard(city, hasIssue, hasAlert, isPast) {
     <div>
       <div class="city-title-row">
         <span class="city-name">${escapeHTML(city.name || '(unnamed)')}</span>
-        <span class="city-country">${escapeHTML(city.country || '—')}${isSchengen(city.country) ? ' · Schengen' : ''}</span>
+        <span class="city-country">${escapeHTML(city.country || '-')}${isSchengen(city.country) ? ' · Schengen' : ''}</span>
         ${statusPill}
         ${scoreBadge}
         ${buildGuideControlHTML(city)}
@@ -13923,12 +13923,12 @@ function renderCityCard(city, hasIssue, hasAlert, isPast) {
     <div class="city-chev">▶</div>
   `;
   header.onclick = (e) => {
-    // Use closest() instead of tag check on direct target — catches clicks on nested
+    // Use closest() instead of tag check on direct target, catches clicks on nested
     // form elements, contenteditable areas, or interactive children
     if (e.target.closest('input, select, button, textarea, a, [contenteditable=true]')) return;
     if (openCityIds.has(capturedId)) openCityIds.delete(capturedId);
     else openCityIds.add(capturedId);
-    // renderAll instead of just renderCities — the elevated card lives in the "Where you are"
+    // renderAll instead of just renderCities, the elevated card lives in the "Where you are"
     // section (rendered by renderNow), so collapsing requires re-rendering that too.
     renderAll();
   };
@@ -13949,7 +13949,7 @@ function renderCityCard(city, hasIssue, hasAlert, isPast) {
   // Delete + Duplicate + Demote buttons
   const footer = document.createElement('div');
   footer.className = 'city-footer-actions';
-  footer.innerHTML = '<button class="btn-secondary" onclick="duplicateCity(\''+capturedId+'\')" title="Create a fresh copy with new dates — useful for home base or return stays">⧉ Duplicate</button><button class="btn-secondary" onclick="demoteCity(\''+capturedId+'\')" title="Move back to Ideas (loses per-city detail but keeps notes)">↩ Demote to Ideas</button><button class="btn-secondary danger" onclick="deleteCity(\''+capturedId+'\')">Delete this city</button>';
+  footer.innerHTML = '<button class="btn-secondary" onclick="duplicateCity(\''+capturedId+'\')" title="Create a fresh copy with new dates: useful for home base or return stays">⧉ Duplicate</button><button class="btn-secondary" onclick="demoteCity(\''+capturedId+'\')" title="Move back to Ideas (loses per-city detail but keeps notes)">↩ Demote to Ideas</button><button class="btn-secondary danger" onclick="deleteCity(\''+capturedId+'\')">Delete this city</button>';
   body.appendChild(footer);
 
   node.appendChild(body);
@@ -13961,12 +13961,12 @@ function buildCityFields(city) {
   div.className = 'city-fields';
   const capturedId = city.id;
 
-  // 1. Country (first — scopes everything else)
+  // 1. Country (first, scopes everything else)
   const countryLabel = document.createElement('div');
   countryLabel.innerHTML = '<span class="field-label">Country</span>';
   const countrySel = document.createElement('select');
   countrySel.className = 'field-input';
-  countrySel.innerHTML = '<option value="">—</option>' + ALL_COUNTRIES.map(c =>
+  countrySel.innerHTML = '<option value="">-</option>' + ALL_COUNTRIES.map(c =>
     `<option value="${escapeHTML(c)}" ${c === city.country ? 'selected' : ''}>${escapeHTML(c)}</option>`
   ).join('');
   countrySel.onchange = () => updateCity(capturedId, 'country', countrySel.value);
@@ -13979,7 +13979,7 @@ function buildCityFields(city) {
     stateLabel.innerHTML = '<span class="field-label">US State</span>';
     const stateSel = document.createElement('select');
     stateSel.className = 'field-input';
-    stateSel.innerHTML = '<option value="">—</option>' + US_STATES.map(s =>
+    stateSel.innerHTML = '<option value="">-</option>' + US_STATES.map(s =>
       `<option value="${s}" ${s === city.state ? 'selected' : ''}>${s}</option>`
     ).join('');
     stateSel.onchange = () => updateCity(capturedId, 'state', stateSel.value);
@@ -13990,7 +13990,7 @@ function buildCityFields(city) {
   // 3. City name
   div.appendChild(makeField('City name', 'text', city.name || '', v => updateCity(capturedId, 'name', v)));
 
-  // 4. Status (always shown — was previously hidden when US)
+  // 4. Status (always shown, was previously hidden when US)
   const statusLabel = document.createElement('div');
   statusLabel.innerHTML = '<span class="field-label">Status</span>';
   const sel = document.createElement('select');
@@ -14120,13 +14120,13 @@ function buildUncoveredPanel(city) {
   }
   ranges.push([curStart, curEnd]);
   const rangeText = ranges.map(([s, e]) => (s === e ? fmtDate(s) : fmtDate(s) + ' → ' + fmtDate(e))).join(', ');
-  panel.innerHTML = '<div class="uncovered-head">⚠ <strong>' + uncovered.length + ' night' + (uncovered.length===1?'':'s') + ' without a booked bed</strong></div><div class="uncovered-dates">' + rangeText + '</div><div class="uncovered-note">Coverage is checked globally — an accommodation in any city or any overnight transit counts. Add a stay or extend an existing booking to resolve.</div>';
+  panel.innerHTML = '<div class="uncovered-head">⚠ <strong>' + uncovered.length + ' night' + (uncovered.length===1?'':'s') + ' without a booked bed</strong></div><div class="uncovered-dates">' + rangeText + '</div><div class="uncovered-note">Coverage is checked globally: an accommodation in any city or any overnight transit counts. Add a stay or extend an existing booking to resolve.</div>';
   return panel;
 }
 
 // MERGED "Stay & Travel" section: one chronological timeline mixing where-you-sleep (beds)
 // and how-you-get-to-the-next-place (transit legs), sorted by date. This makes both gaps
-// visible at once — a missing bed AND a missing travel leg — so neither gets forgotten.
+// visible at once, a missing bed AND a missing travel leg, so neither gets forgotten.
 // Reuses the existing row builders (buildAccommodation / buildTransitionRow) so all editors,
 // open/close state, and AI scoring continue to work unchanged.
 function buildStayAndTravel(city) {
@@ -14151,7 +14151,7 @@ function buildStayAndTravel(city) {
   // this answers the stop, which is the unit a cash withdrawal is planned in.
   const cashDue = (city.accommodations || []).reduce((s, a) => s + stayCashDue(a), 0);
   if (cashDue > 0) subParts.push(fmtCurrency(cashDue, 'USD') + ' due on site');
-  const subtitle = subParts.join(' — ');
+  const subtitle = subParts.join(', ');
 
   const headerHTML =
     '<div class="city-block-header">' +
@@ -14211,7 +14211,7 @@ function buildStayAndTravel(city) {
       if (legDate && co && legDate === co) legFirst = false;       // departing this stay
       else if (legDate && ci && legDate === ci) legFirst = true;   // arriving into this stay
       else {
-        // No clean date match — use the per-stay city ONLY if explicitly set (the parent-city
+        // No clean date match, use the per-stay city ONLY if explicitly set (the parent-city
         // default is unreliable for multi-city legs), else a departure-time heuristic.
         const cityExplicit = !!(stayE.ref.city && stayE.ref.city.trim());
         const sc   = stayCityOf(stayE);
@@ -14277,11 +14277,11 @@ function buildAccommodations(city) {
       if (s === e) return fmtDate(s);
       return fmtDate(s) + ' → ' + fmtDate(e);
     }).join(', ');
-    panel.innerHTML = '<div class="uncovered-head">⚠ <strong>' + uncovered.length + ' night' + (uncovered.length===1?'':'s') + ' without a booked bed</strong></div><div class="uncovered-dates">' + rangeText + '</div><div class="uncovered-note">Coverage is checked globally — an accommodation in any city or any overnight transit counts. Add a stay or extend an existing booking to resolve.</div>';
+    panel.innerHTML = '<div class="uncovered-head">⚠ <strong>' + uncovered.length + ' night' + (uncovered.length===1?'':'s') + ' without a booked bed</strong></div><div class="uncovered-dates">' + rangeText + '</div><div class="uncovered-note">Coverage is checked globally: an accommodation in any city or any overnight transit counts. Add a stay or extend an existing booking to resolve.</div>';
     wrap.appendChild(panel);
   }
 
-  // Standardized block header — same structure as buildTransitions
+  // Standardized block header, same structure as buildTransitions
   const headerHTML =
     '<div class="city-block-header">' +
       '<h3 class="city-block-title">Accommodations<span class="city-block-subtitle">where you sleep</span></h3>' +
@@ -14295,7 +14295,7 @@ function buildAccommodations(city) {
   const list = document.createElement('div');
   list.className = 'accom-list';
   // Sort accommodations by checkIn date (earliest first). Stable secondary sort by name.
-  // Sort a shallow copy so we never mutate state.cities order — snapshots / restore
+  // Sort a shallow copy so we never mutate state.cities order, snapshots / restore
   // depend on stable serialization.
   const sortedAccoms = (city.accommodations || []).slice().sort((a, b) => {
     const ai = a.checkIn || '';
@@ -14380,14 +14380,14 @@ function buildAccommodation(city, acc) {
   const cityId = city.id;
   const accId = acc.id;
 
-  // Row 1: name, link, status, delete (ALWAYS VISIBLE — this is the clickable header)
+  // Row 1: name, link, status, delete (ALWAYS VISIBLE, this is the clickable header)
   const row1 = document.createElement('div');
   row1.className = 'accom-row1';
 
   const nameWrap = document.createElement('div');
   const name = document.createElement('div');
   name.className = 'accom-name';
-  // Name is NOT contentEditable by default — clicking it toggles the accordion (matches
+  // Name is NOT contentEditable by default, clicking it toggles the accordion (matches
   // intuitive accordion-header behavior). Double-click to enter rename mode.
   name.contentEditable = 'false';
   name.textContent = acc.name || '';
@@ -14498,13 +14498,13 @@ function buildAccommodation(city, acc) {
   nameWrap.appendChild(linkRow);
   row1.appendChild(nameWrap);
 
-  // Date range — same right-aligned placement as a leg's date. Time isn't tracked for stays,
+  // Date range, same right-aligned placement as a leg's date. Time isn't tracked for stays,
   // so this shows dates only; updates automatically when check-in/out are edited (full re-render).
   const dateChip = document.createElement('div');
   dateChip.className = 'accom-summary-date';
   if (acc.checkIn && acc.checkOut) dateChip.textContent = fmtDate(acc.checkIn) + ' → ' + fmtDate(acc.checkOut);
   else if (acc.checkIn) dateChip.textContent = fmtDate(acc.checkIn) + ' → ?';
-  else dateChip.innerHTML = '<span class="muted">— no dates —</span>';
+  else dateChip.innerHTML = '<span class="muted">no dates</span>';
   row1.appendChild(dateChip);
 
   // Status pill / select
@@ -14579,7 +14579,7 @@ function buildAccommodation(city, acc) {
 
   item.appendChild(row1);
 
-  // Stats summary (always visible — shows in both collapsed and expanded states under row1)
+  // Stats summary (always visible, shows in both collapsed and expanded states under row1)
   const summary = document.createElement('div');
   summary.className = 'accom-summary';
   summary.style.cssText = 'font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--text-3);letter-spacing:0.04em;padding:4px 0 0';
@@ -14598,7 +14598,7 @@ function buildAccommodation(city, acc) {
   renderSummary();
   item.appendChild(summary);
 
-  // Collapsible body — holds all editing fields
+  // Collapsible body, holds all editing fields
   const body = document.createElement('div');
   body.className = 'accom-body';
   body.style.display = openAccomIds.has(accId) ? '' : 'none';
@@ -14615,7 +14615,7 @@ function buildAccommodation(city, acc) {
   const cityField = document.createElement('input');
   cityField.className = 'accom-mini-field';
   cityField.placeholder = (city.name ? city.name + ' (default)' : 'City');
-  cityField.title = 'City this property is in. Blank = same as the itinerary city (' + (city.name || '—') + ').';
+  cityField.title = 'City this property is in. Blank = same as the itinerary city (' + (city.name || '-') + ').';
   cityField.value = acc.city || '';
   cityField.onblur = () => updateAccom(cityId, accId, 'city', cityField.value.trim());
   row2.appendChild(cityField);
@@ -14667,7 +14667,7 @@ function buildAccommodation(city, acc) {
   notes.className = 'notes-area';
   notes.style.marginTop = '8px';
   notes.style.minHeight = '40px';
-  notes.placeholder = 'Notes — pros, cons, host responses…';
+  notes.placeholder = 'Notes, pros, cons, host responses…';
   notes.value = acc.notes || '';
   notes.onblur = () => updateAccom(cityId, accId, 'notes', notes.value);
   body.appendChild(notes);
@@ -14740,7 +14740,7 @@ function buildCitySubsections(city) {
 // Builds the AI prompt that asks for tailored neighborhood/attraction/restaurant/etc. picks
 // based on the traveler's stored profile.
 function buildCityResearchPrompt(city) {
-  const profile = state.profile || '(no profile set — use neutral nomad-friendly defaults)';
+  const profile = state.profile || '(no profile set, use neutral nomad-friendly defaults)';
   const cityName = city.name;
   const country = city.country || 'unspecified country';
   const dates = (city.checkIn && city.checkOut)
@@ -14766,14 +14766,14 @@ City: ${cityName}
 Country: ${country}
 Dates: ${dates}${nights > 0 ? ` (${nights} nights)` : ''}
 
-ALREADY ADDED — do NOT duplicate these:
+ALREADY ADDED, do NOT duplicate these:
 - Neighborhoods: ${existing.neighborhoods}
 - Attractions: ${existing.attractions}
 - Restaurants: ${existing.restaurants}
 - Day trips: ${existing.dayTrips}
 - Coworking: ${existing.coworking}
 
-TASK: Generate 3-5 items in each category, tailored to the traveler's profile. For each item, include a one-sentence note (max ~100 chars) about why it matters or what's special. Use REAL specific names — not generic descriptions.
+TASK: Generate 3-5 items in each category, tailored to the traveler's profile. For each item, include a one-sentence note (max ~100 chars) about why it matters or what's special. Use REAL specific names, not generic descriptions.
 
 For NEIGHBORHOODS: focus on lodging areas, balancing the traveler's stated needs (walkability, climate, work-friendliness, beach access, etc.).
 For ATTRACTIONS: prioritize what matches their interests, not just tourist-must-sees.
@@ -15216,7 +15216,7 @@ function setupProfile() {
 }
 
 function resetProfile() {
-  if (armConfirm('resetProfile', 'Click "Reset to default" again to confirm — your custom profile will be replaced.')) return;
+  if (armConfirm('resetProfile', 'Click "Reset to default" again to confirm, your custom profile will be replaced.')) return;
   state.profile = DEFAULT_PROFILE;
   saveState();
   renderProfile();
@@ -16185,7 +16185,7 @@ function exportData() {
 }
 
 function triggerFileImport() {
-  // Programmatically create file input within user gesture — most robust across sandboxes
+  // Programmatically create file input within user gesture, most robust across sandboxes
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json,application/json,text/plain';
@@ -16206,7 +16206,7 @@ function setDataStatus(msg, kind) {
   if (kind === 'ok' || kind === 'error') {
     setTimeout(() => {
       if (el.textContent === msg) {
-        el.textContent = 'Export regularly. Browser data can be wiped — keep backups.';
+        el.textContent = 'Export regularly. Browser data can be wiped, so keep backups.';
         el.style.color = '';
       }
     }, 6000);
@@ -16358,7 +16358,7 @@ function applyImportedJSON(text, source) {
   // Detect format: { meta, state } wrapper or bare state. Accept either.
   const importedState = (parsed.state && typeof parsed.state === 'object') ? parsed.state : parsed;
 
-  // Sanity check — does this look like a plan-ahead export?
+  // Sanity check, does this look like a plan-ahead export?
   const expectedKeys = ['cities', 'ideas', 'profile', 'aiMode'];
   const matchedKeys = expectedKeys.filter(k => k in importedState);
   if (matchedKeys.length === 0) {
@@ -16371,7 +16371,7 @@ function applyImportedJSON(text, source) {
   }
 
   // Confirm destructive replacement and announce safety snapshot
-  if (!confirm('Replace all current data with imported JSON?\n\nA safety snapshot of your current data will be taken first — you can restore it from Settings → Snapshots if something goes wrong.')) {
+  if (!confirm('Replace all current data with imported JSON?\n\nA safety snapshot of your current data will be taken first, you can restore it from Settings → Snapshots if something goes wrong.')) {
     const msg = 'Import cancelled.';
     if (source === 'paste') setPasteStatus(msg, '');
     else setDataStatus(msg, '');
@@ -16790,7 +16790,7 @@ function resetAll() {
   setTimeout(() => {
     if (el.dataset.armed === '1') {
       el.dataset.armed = '0';
-      el.textContent = 'Auto-saved continuously to your browser. Export regularly — browser data can be wiped.';
+      el.textContent = 'Auto-saved continuously to your browser. Export regularly: browser data can be wiped.';
       el.style.color = '';
     }
   }, 5000);
@@ -16832,7 +16832,7 @@ function renderSnapshots() {
     const cityCount = (s.data && s.data.cities) ? s.data.cities.length : 0;
     const ideaCount = (s.data && s.data.ideas) ? s.data.ideas.length : 0;
     const transCount = (s.data && s.data.transitions) ? s.data.transitions.length : 0;
-    // Accommodations are nested in cities — sum across all cities
+    // Accommodations are nested in cities, sum across all cities
     const accomCount = (s.data && s.data.cities)
       ? s.data.cities.reduce((sum, c) => sum + ((c.accommodations || []).length), 0)
       : 0;
@@ -16909,7 +16909,7 @@ function addCity() {
   } else {
     // Try external geocode (fire-and-forget); will update if it succeeds
     autoGeocodeCity(city.id);
-    toast(name + ' added. Coordinates not in built-in database — try Lookup button or enter manually.');
+    toast(name + ' added. Coordinates not in built-in database, try Lookup button or enter manually.');
   }
 }
 
@@ -16952,7 +16952,7 @@ function duplicateCity(id) {
   const original = state.cities.find(c => c.id === id);
   if (!original) return;
   // Copy all reusable per-place data (neighborhoods, attractions, restaurants, etc.)
-  // but reset dates, accommodations, scores — those are stay-specific.
+  // but reset dates, accommodations, scores, those are stay-specific.
   const newCity = {
     id: newId(),
     name: original.name,
@@ -16977,7 +16977,7 @@ function duplicateCity(id) {
   openCityIds.add(newCity.id);
   saveState();
   renderAll();
-  toast('Duplicated ' + original.name + ' — set new dates in the expanded card.', 'ok');
+  toast('Duplicated ' + original.name + ', set new dates in the expanded card.', 'ok');
 }
 
 function demoteCity(id) {
@@ -17068,7 +17068,7 @@ function exitLegsForCity(city) {
 }
 
 // Sum of booked transit-leg costs attributed to this city. Used in city headers,
-// rollups, and budget comparisons. Only counts booked legs — tentative/shortlisted
+// rollups, and budget comparisons. Only counts booked legs, tentative/shortlisted
 // transitions don't represent committed spend.
 function cityTransitCost(city) {
   if (!city || !city.id) return 0;
@@ -17144,7 +17144,7 @@ function buildAdminTransitMini(t) {
   const fromName = t.fromCity || (srcCity ? srcCity.name : '');
   const route = (fromName && t.toCity)
     ? fromName + ' → ' + t.toCity
-    : (t.toCity ? '→ ' + t.toCity : '— set destination —');
+    : (t.toCity ? '→ ' + t.toCity : ', set destination,');
   let timeBit = '';
   if (t.departureDate) {
     timeBit = fmtDate(t.departureDate);
@@ -17227,7 +17227,7 @@ function updateTransition(id, key, value) {
   t[key] = value;
   saveState();
   // Fields commit on `change`/blur (not per-keystroke), so the edited input has already
-  // lost focus by the time we repaint — no focus-snapping. Repaint every commit so the leg
+  // lost focus by the time we repaint, no focus-snapping. Repaint every commit so the leg
   // summary, the section subtotal, the budget rollup, and the between-city mini-cards stay live.
   repaint();
 }
@@ -17250,7 +17250,7 @@ function buildTransitions(city) {
   const cid = city.id;
 
   // Build subtitle: list of mode descriptors + booked subtotal when > 0.
-  // Mirrors the accom-section pattern — block-level cost visibility at a glance.
+  // Mirrors the accom-section pattern, block-level cost visibility at a glance.
   const bookedTransitTotal = cityTransitCost(city);
   const subtitleParts = ['flights, trains, ferries…'];
   if (bookedTransitTotal > 0) {
@@ -17258,7 +17258,7 @@ function buildTransitions(city) {
   }
   const subtitle = subtitleParts.join(' · ');
 
-  // Standardized block header — mirrors buildAccommodations structure
+  // Standardized block header, mirrors buildAccommodations structure
   const headerHTML =
     '<div class="city-block-header">' +
       '<h3 class="city-block-title">Outbound travel<span class="city-block-subtitle">' + escapeHTML(subtitle) + '</span></h3>' +
@@ -17291,7 +17291,7 @@ function buildTransitionRow(city, t) {
   const tid = t.id;
   const icon = transitionIcon(t.mode);
 
-  // Compact summary line — always visible, clickable to toggle the editor body below
+  // Compact summary line, always visible, clickable to toggle the editor body below
   const summary = document.createElement('div');
   summary.className = 'transit-summary';
   summary.style.cursor = 'pointer';
@@ -17300,7 +17300,7 @@ function buildTransitionRow(city, t) {
     : transitionLabel(t.mode);
   const dateBit = t.departureDate
     ? fmtDate(t.departureDate) + (t.departureTime ? ' · ' + t.departureTime : '')
-    : '<span class="muted">— no date —</span>';
+    : '<span class="muted">, no date,</span>';
   const fromLabel = t.fromCity || (city ? city.name : '');
   summary.innerHTML =
     '<span class="transit-icon">' + icon + '</span>' +
@@ -17313,7 +17313,7 @@ function buildTransitionRow(city, t) {
     '<button class="icon-btn delete" title="Remove" onclick="event.stopPropagation(); deleteTransition(\'' + tid + '\')">✕</button>' +
     '<span class="transit-chev" style="margin-left:8px;color:var(--text-3);font-size:11px;transition:transform 0.2s;transform:rotate(' + (isOpen ? '0' : '-90') + 'deg)">▾</span>';
 
-  // Body wraps the editor + notes + delete — toggled by clicking the summary
+  // Body wraps the editor + notes + delete, toggled by clicking the summary
   const body = document.createElement('div');
   body.className = 'transit-body';
   body.style.display = isOpen ? '' : 'none';
@@ -17363,10 +17363,10 @@ function buildTransitionRow(city, t) {
   // Notes (full width)
   const notes = document.createElement('label');
   notes.className = 'transit-notes';
-  notes.innerHTML = `Notes (admin only — not shown in family share)<textarea rows="2" placeholder="Layover info, terminal, etc." onchange="updateTransition('${tid}','notes',this.value)">${escapeHTML(t.notes||'')}</textarea>`;
+  notes.innerHTML = `Notes (admin only, not shown in family share)<textarea rows="2" placeholder="Layover info, terminal, etc." onchange="updateTransition('${tid}','notes',this.value)">${escapeHTML(t.notes||'')}</textarea>`;
   body.appendChild(notes);
 
-  // Toggle handler on the summary header — same pattern as city / accom accordions:
+  // Toggle handler on the summary header, same pattern as city / accom accordions:
   // click anywhere except actual form controls toggles the body open/closed.
   summary.addEventListener('click', (e) => {
     if (e.target.closest('input, select, textarea, button, a, [contenteditable=true]')) return;
@@ -17383,7 +17383,7 @@ function buildTransitionRow(city, t) {
     }
   });
 
-  // Booking link — same chip / "+ Add booking link" UI as accommodations, shown in the
+  // Booking link, same chip / "+ Add booking link" UI as accommodations, shown in the
   // always-visible header area (below the summary line). Lives here rather than the expanded
   // grid so it matches the stay format and is reachable without opening the editor.
   const legLink = document.createElement('div');
@@ -17609,7 +17609,7 @@ function buildAccomPrompt(city, acc) {
   if (acc.notes) lines.push(`- My notes: ${acc.notes}`);
   lines.push("");
   lines.push("## Please provide");
-  lines.push("1. Fit score 1–10 against my criteria");
+  lines.push("1. Fit score 1-10 against my criteria");
   lines.push("2. Pros aligned with my profile");
   lines.push("3. Concerns or red flags");
   lines.push("4. Questions I should ask the host before booking");
@@ -17686,7 +17686,7 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
-// Toast: non-blocking replacement for alert() — works in any sandbox
+// Toast: non-blocking replacement for alert(). Works in any sandbox
 let _toastTimer;
 function toast(msg, kind) {
   const el = document.getElementById('toast');
@@ -17724,7 +17724,7 @@ function toastWithAction(msg, actionLabel, actionFn, kind) {
   }, 8000); // longer window for undo
 }
 
-// armConfirm: replacement for blocking confirm() — first click arms, second click within timeout fires
+// armConfirm: replacement for blocking confirm(). First click arms, second click within timeout fires
 // Returns true if armed (caller should not proceed yet), false if confirmed (proceed)
 const _armState = {};
 function armConfirm(key, armedMessage, timeoutMs) {
@@ -17798,10 +17798,10 @@ function buildLatLngRow(city) {
 
 async function geocode(name, country) {
   if (!name) return null;
-  // 1. Built-in lookup — instant, no network
+  // 1. Built-in lookup, instant, no network
   const localHit = lookupCity(name, country);
   if (localHit) return localHit;
-  // 2. Anthropic API (if configured) — broad knowledge, reliable in any sandbox
+  // 2. Anthropic API (if configured), broad knowledge, reliable in any sandbox
   if (apiAiReady()) {
     const apiHit = await geocodeViaAPI(name, country);
     if (apiHit) return apiHit;
@@ -17932,7 +17932,7 @@ function renderMap() {
       _markers = [];
     }
     emptyEl.style.display = 'flex';
-    document.getElementById('map-meta').textContent = '—';
+    document.getElementById('map-meta').textContent = '-';
     const rbtn = document.getElementById('map-reset-btn');
     if (rbtn) rbtn.style.display = 'none';
     return;
@@ -18013,7 +18013,7 @@ function buildPopup(c, kind) {
 function cityMarkerKind(c, todayStr) {
   if (c.checkOut && c.checkOut < todayStr) return 'past';
   if (c.checkIn && c.checkIn <= todayStr && c.checkOut && c.checkOut >= todayStr) return 'now';
-  // Future — split by status
+  // Future, split by status
   if (c.status === 'booked') return 'future-booked';
   if (c.status === 'shortlisted') return 'future-shortlisted';
   return 'future';
@@ -18032,7 +18032,7 @@ function haversineKm(lat1, lng1, lat2, lng2) {
 }
 
 function scoreSchengen(city) {
-  if (!isSchengen(city.country)) return { score: 100, note: 'Non-Schengen — no impact on 90/180 counter.' };
+  if (!isSchengen(city.country)) return { score: 100, note: 'Non-Schengen, no impact on 90/180 counter.' };
   if (!city.checkOut) return { score: null, note: 'No checkout date yet.' };
   // The last day of presence IS checkOut, because departure day counts. This
   // used to score at checkOut minus one and to round-trip the date through
@@ -18140,7 +18140,7 @@ async function scoreClimate(city) {
   return { score, note: `Avg high ${data.avgHigh.toFixed(1)}°C${humStr} (historical, same dates).`, data };
 }
 
-// Composite weights — climate + culture matter most per profile, schengen is critical
+// Composite weights, climate + culture matter most per profile, schengen is critical
 const SCORE_WEIGHTS = { climate: 0.30, schengen: 0.25, proximity: 0.10, budget: 0.15, culture: 0.20 };
 
 function computeComposite(scores) {
@@ -18359,7 +18359,7 @@ function buildBatchCityScorePrompt(cities) {
   cities.forEach(city => {
     const nights = cityNights(city);
     lines.push("");
-    lines.push(`### id=${city.id} — ${city.name}, ${city.country || '?'}`);
+    lines.push(`### id=${city.id}, ${city.name}, ${city.country || '?'}`);
     lines.push(`Stay: ${city.checkIn||'?'} → ${city.checkOut||'?'} (${nights} nights)`);
     if (city.estimatedCost) lines.push(`Estimated cost: $${city.estimatedCost} USD`);
     if (city.notes) lines.push(`Notes: ${city.notes}`);
@@ -18376,7 +18376,7 @@ function buildBatchCityScorePrompt(cities) {
   lines.push("- **culture**: cultural/lifestyle fit (vibe, walkability, expat scene, attractions, language)");
   lines.push("- **climate** (ONLY if not pre-computed): climate fit for the stay dates per the profile's HARD constraints");
   lines.push("");
-  lines.push("Also include `bestMonths`: an array of 1-4 short month names (e.g., [\"Jun\",\"Jul\",\"Aug\"]) representing when this destination is IDEAL based on the profile criteria — regardless of currently planned dates.");
+  lines.push("Also include `bestMonths`: an array of 1-4 short month names (e.g., [\"Jun\",\"Jul\",\"Aug\"]) representing when this destination is IDEAL based on the profile criteria, regardless of currently planned dates.");
   lines.push("");
   lines.push("Output schema (return EXACTLY this shape):");
   lines.push('{"results": [{"id": "city_id", "budget": {"score": N, "note": "1 sentence"}, "culture": {"score": N, "note": "1 sentence"}, "climate": {"score": N, "note": "1 sentence"}, "bestMonths": ["Jun","Jul"]}]}');
@@ -18462,7 +18462,7 @@ function buildBatchAccomScorePrompt(city, accoms) {
   accoms.forEach(a => {
     const accomNights = nightsBetween(a.checkIn, a.checkOut);
     lines.push("");
-    lines.push(`### id=${a.id} — ${a.name || '(unnamed)'}`);
+    lines.push(`### id=${a.id}, ${a.name || '(unnamed)'}`);
     if (a.link) lines.push(`Link: ${a.link}`);
     if (a.neighborhood) lines.push(`Neighborhood: ${a.neighborhood}`);
     if (a.checkIn || a.checkOut) lines.push(`Dates: ${a.checkIn||'?'} → ${a.checkOut||'?'} (${accomNights} nights of city's ${nights})`);
@@ -18798,7 +18798,7 @@ function renderBoardColumn(key, label, cities, granularity, issueIds, alertIds, 
           <button class="delete" onclick="event.stopPropagation();deleteCity('${city.id}')" title="Delete">✕</button>
         </div>
         <div class="name">${escapeHTML(city.name || '(unnamed)')}</div>
-        <div class="meta">${escapeHTML(city.country || '—')} · ${fmtDateShort(city.checkIn)}–${fmtDateShort(city.checkOut)} · ${nights}n</div>
+        <div class="meta">${escapeHTML(city.country || '-')} · ${fmtDateShort(city.checkIn)}-${fmtDateShort(city.checkOut)} · ${nights}n</div>
         ${climateNote}
         <div class="row">
           <div class="pills">${statusPill}</div>
@@ -18942,7 +18942,7 @@ function autoScoreCity(cityId) {
 
 // Schengen score depends on GLOBAL rolling state (all other cities' dates), so
 // when any city's dates/country/status changes, every city's Schengen score
-// needs to be recomputed — not just the one that changed. Same will apply to
+// needs to be recomputed, not just the one that changed. Same will apply to
 // FEIE / US-day scores if those get cached in the future.
 function recomputeGlobalScores() {
   state.cities.forEach(c => {
@@ -18961,7 +18961,7 @@ function openScoreModal(cityId) {
   _scoreCityId = cityId;
   document.getElementById('score-modal-title').textContent = 'Score: ' + (city.name || '(unnamed)');
   document.getElementById('score-modal-sub').textContent =
-    (city.country || '—') + ' · ' + fmtDateShort(city.checkIn) + ' → ' + fmtDateShort(city.checkOut);
+    (city.country || '-') + ' · ' + fmtDateShort(city.checkIn) + ' → ' + fmtDateShort(city.checkOut);
 
   // Show/hide AI button based on config
   const aiBtn = document.getElementById('score-ai-btn');
@@ -18999,7 +18999,7 @@ function renderScoreContent(city) {
   let html = `
     <div class="score-composite">
       <div class="label">Composite score</div>
-      <div class="value ${compositeCls}">${composite != null ? composite + '%' : '—'}</div>
+      <div class="value ${compositeCls}">${composite != null ? composite + '%' : '-'}</div>
       <div class="sub">${composite != null ? 'Weighted across components' : 'Run scoring below to compute'}</div>
     </div>
   `;
@@ -19017,7 +19017,7 @@ function renderScoreContent(city) {
           <div class="note">${note}</div>
           <div class="bar-wrap"><div class="bar ${cls}" style="width:${score != null ? score : 0}%"></div></div>
         </div>
-        <div class="num ${cls}">${score != null ? score : '—'}</div>
+        <div class="num ${cls}">${score != null ? score : '-'}</div>
       </div>
     `;
   });
@@ -19137,7 +19137,7 @@ function applyPastedScore() {
 
 // Defensive repaint used by the live-edit handlers. Each render runs in its own try/catch
 // so a failure in one (e.g. the map, or one card with odd data) can never abort the others
-// and leave the screen stale — which is the classic "I had to refresh to see my edit" bug.
+// and leave the screen stale, which is the classic "I had to refresh to see my edit" bug.
 function repaint(opts) {
   opts = opts || {};
   const jobs = [renderNow, renderCounters, renderCities];
@@ -19606,7 +19606,7 @@ function openStopSwitcher() {
     document.body.appendChild(dragOverlay);
     return dragOverlay;
   }
-  let depth = 0; // nested dragenter/leave counter — single counter avoids flicker over child elements
+  let depth = 0; // nested dragenter/leave counter, single counter avoids flicker over child elements
   window.addEventListener('dragenter', (e) => {
     if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes('Files')) return;
     depth++;
@@ -19691,7 +19691,7 @@ const SUPA = {
 // key: the account is the app's, not this page's.
 const AUTH_KEY = 'cityops.auth.v1';          // {access_token, refresh_token, expires_at, email}
 const LEGACY_AUTH_KEY = 'planahead:auth:v1'; // pre-merge session, adopted once (see adoptLegacySession)
-const SYNC_KEY = 'planahead:sync:v1';        // {localUpdated, lastSync} — trip DATA stamps, not the session
+const SYNC_KEY = 'planahead:sync:v1';        // {localUpdated, lastSync}, trip DATA stamps, not the session
 const SYNC_ALERT_KEY = 'planahead:sync:alert:v1';  // {kind, at}
 const GUIDES_KEY = 'planahead:cityops:v1';   // {ids:[cityId], at:iso} - see the seam section
 const SYNC_TABLE = 'planahead';
@@ -21112,7 +21112,7 @@ linkDatePair(addInEl, addOutEl);
 buildTripHeader();
 populateCountries();
 setupProfile();
-// Refresh Schengen scores on load — they may be stale if other cities were
+// Refresh Schengen scores on load, they may be stale if other cities were
 // added/removed/eliminated since the last edit of any given city.
 recomputeGlobalScores();
 renderAll();

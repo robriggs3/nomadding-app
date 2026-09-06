@@ -334,7 +334,7 @@ const TODAY = new Date().toISOString().slice(0,10);
 var TRAVELER = 'They';
 
 function fmtDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const d = new Date(iso + 'T12:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
@@ -535,7 +535,7 @@ function buildStayRow(a, isCurrentCity) {
   return '<div class="' + cls + '"><div class="accom-name">' + nameBit + '</div>' + metaBit + '</div>';
 }
 
-// Sort a mixed list of stays + legs into one chronological timeline — IDENTICAL logic to the
+// Sort a mixed list of stays + legs into one chronological timeline. IDENTICAL logic to the
 // admin app's buildStayAndTravel comparator, so the family view matches what Rob sees.
 function stayTravelSort(entries, parentCityName) {
   const parent = (parentCityName || '').trim().toLowerCase();
@@ -627,7 +627,7 @@ function render() {
       : '';
     cs.innerHTML = '<div class="current-banner"><div class="you-are-here-badge">● ' + escapeHTML(TRAVELER) + ' is here</div><h2>' + escapeHTML(current.name) + '<span class="country">' + escapeHTML(current.country) + (current.state ? ' · ' + escapeHTML(current.state) : '') + '</span></h2><div class="dates">' + fmtDate(current.checkIn) + ' → ' + fmtDate(current.checkOut) + '<span class="days-left">' + daysLeft + ' day' + (daysLeft===1?'':'s') + ' left</span>' + cityGuideLink(current) + '</div>' + timelineHTML + '</div>';
   } else {
-    cs.innerHTML = '<div class="current-banner" style="border-color:var(--border);box-shadow:var(--shadow-sm);padding-top:24px"><div style="text-align:center;color:var(--text-3);font-style:italic;font-family:Fraunces,serif;font-size:18px">Between stays — see upcoming below</div></div>';
+    cs.innerHTML = '<div class="current-banner" style="border-color:var(--border);box-shadow:var(--shadow-sm);padding-top:24px"><div style="text-align:center;color:var(--text-3);font-style:italic;font-family:Fraunces,serif;font-size:18px">Between stays, see upcoming below</div></div>';
   }
 
   document.getElementById('map-legend').innerHTML =
