@@ -1759,7 +1759,7 @@
       }).catch(function (e) {
         btn.disabled = false;
         btn.textContent = orig;
-        cfg.msg.textContent = 'Claude API error: ' + e.message;
+        cfg.msg.textContent = CityOps.aiProxyKit.errorText(e);
       });
     }
 
@@ -1857,7 +1857,7 @@
       }).catch(function (e) {
         btn.disabled = false;
         btn.textContent = origLabel;
-        msg.textContent = 'Claude API error: ' + e.message;
+        msg.textContent = CityOps.aiProxyKit.errorText(e);
       });
     }
     // `noun` names the pass on its own button. The three blocks used to carry
@@ -2093,7 +2093,7 @@
         }).catch(function (e) {
           run.disabled = false;
           run.textContent = orig;
-          msg.textContent = 'Claude API error: ' + e.message;
+          msg.textContent = CityOps.aiProxyKit.errorText(e);
         });
       };
       row.appendChild(run);
@@ -2861,7 +2861,7 @@
             ' is still in your cities. Press Retry when you want to fill it.');
           return;
         }
-        showRetry('Claude API error: ' + e.message);
+        showRetry(CityOps.aiProxyKit.errorText(e));
       });
     }
     // Puts an unusable reply somewhere the traveler can still act on it,
