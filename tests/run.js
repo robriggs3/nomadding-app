@@ -1910,6 +1910,60 @@ test('TABS is the five fixed tabs, in nav order', () => {
   assert.deepEqual(C.TABS.map(t => t.id), ['plan', 'eat', 'do', 'services', 'info']);
   assert.deepEqual(C.TABS.map(t => t.label), ['Plan', 'Eat & Drink', 'Do', 'Services', 'Info']);
 });
+test('a section the model invented still reaches the right tab', () => {
+  // The Ohrid failure, 2026-09-06. A generated guide came back with sections
+  // the contract never names, every one of them fell to Info, and Eat and Drink
+  // read as empty on a city that had just been researched. An unrecognised
+  // section is the one failure mode a traveler cannot diagnose, so the common
+  // synonyms are recognised now.
+  ['food', 'dining', 'cafes', 'eat', 'drinks', 'bakery', 'nightlife'].forEach((id) => {
+    assert.equal(C.tabForSection({ id: id, label: id }), 'eat', id + ' should be Eat and Drink');
+  });
+  ['see', 'sights', 'attractions', 'do', 'tours', 'museums', 'daytrips'].forEach((id) => {
+    assert.equal(C.tabForSection({ id: id, label: id }), 'do', id + ' should be Do');
+  });
+  // Label-only rescue: an id nobody listed, with a label that says what it is.
+  assert.equal(C.tabForSection({ id: 'sec-7', label: 'Restaurants & Wine Bars' }), 'eat');
+  assert.equal(C.tabForSection({ id: 'sec-8', label: 'Museums and Galleries' }), 'do');
+  // The trap the word boundary exists for: a haircut is not a wine bar.
+  assert.equal(C.tabForSection({ id: 'barber', label: 'Barber' }), 'services');
+  assert.equal(C.tabForSection({ id: 'beauty', label: 'Beauty & Massage' }), 'services');
+  // Known ids still win over every keyword, which is what keeps "Health &
+  // safety" reference material rather than a services listing.
+  assert.equal(C.tabForSection({ id: 'safety', label: 'Health & safety' }), 'info');
+  assert.equal(C.tabForSection({ id: 'practical', label: 'Practical' }), 'info');
+  // And a section that really is unrecognisable is still reference, not a todo.
+  assert.equal(C.tabForSection({ id: 'zzz', label: 'Miscellany' }), 'info');
+});
+
+test('every section id PROMPT.md pins is one the engine files correctly', () => {
+  // The prompt and the tab mapping are two halves of one contract and they
+  // drifted apart silently. This is the seam, so it is asserted: if either side
+  // renames a section, this fails rather than a tab quietly emptying.
+  const fs = require('fs');
+  const path = require('path');
+  const prompt = fs.readFileSync(path.join(__dirname, '..', 'PROMPT.md'), 'utf8');
+  const expected = {
+    dinner: 'eat', breakfast: 'eat', lunch: 'eat', coffee: 'eat',
+    cowork: 'services', activities: 'do', services: 'services',
+    practical: 'info', interests: 'do'
+  };
+  Object.keys(expected).forEach((id) => {
+    assert.equal(C.tabForSection({ id: id, label: id }), expected[id],
+      'PROMPT.md pins "' + id + '" but the engine files it elsewhere');
+    assert.ok(prompt.indexOf('`' + id + '`') !== -1,
+      'the engine expects "' + id + '" but PROMPT.md never names it');
+  });
+  // The research pass must not invent ids again: it shipped on 2026-09-05
+  // telling the model to create a section called "do", which the engine filed
+  // as reference material.
+  const research = prompt.slice(prompt.indexOf('RERUN:RESEARCH'),
+    prompt.indexOf('/RERUN:RESEARCH'));
+  assert.equal(research.indexOf('"id": "do"'), -1, 'the research pass invents a "do" section again');
+  assert.ok(research.indexOf('use ONLY these section ids') !== -1,
+    'the research pass stopped pinning the section ids');
+});
+
 test('tabForSection maps the PROMPT.md schema sections', () => {
   assert.equal(C.tabForSection({ id: 'dinner', label: 'Dinner' }), 'eat');
   assert.equal(C.tabForSection({ id: 'breakfast', label: 'Breakfast' }), 'eat');

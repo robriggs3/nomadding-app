@@ -2017,8 +2017,20 @@ var CityOps = (function () {
   ];
   var TAB_IDS = TABS.map(function (t) { return t.id; });
 
-  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars'];
-  var DO_SECTION_IDS = ['activities', 'interests'];
+  // The ids PROMPT.md pins, plus the synonyms a model reaches for when it
+  // drifts off the contract. It does drift: a long schema contract is the first
+  // thing to slip on a run that has just been through a web-search tool loop,
+  // and the failure was silent because an unrecognised section falls to Info
+  // (see the fallback at the end of tabForSection). A traveler then opens Eat
+  // and Drink on a freshly generated city and finds it empty while every
+  // restaurant sits under Info, which reads as "generation failed" rather than
+  // "one word was wrong".
+  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars',
+    'eat', 'drink', 'drinks', 'food', 'dining', 'cafe', 'cafes', 'bakery', 'bakeries',
+    'brunch', 'nightlife'];
+  var DO_SECTION_IDS = ['activities', 'interests',
+    'do', 'see', 'sights', 'sightseeing', 'attractions', 'tours', 'excursions',
+    'daytrips', 'day-trips', 'museums', 'beaches'];
   // cowork moved here from EAT_SECTION_IDS (owner decision 2026-08-26).
   // A coworking space is a nomad utility, not a meal: filing it under Eat &
   // Drink put "day pass, 1500 ALL, fast wifi" between two dinner cards. A
@@ -2033,6 +2045,14 @@ var CityOps = (function () {
   // keyword fallback only fires for a section this list has never heard of.
   var INFO_SECTION_IDS = ['base', 'money', 'transport', 'safety', 'practical', 'logistics', 'context', 'corrections'];
   var SERVICE_KEYWORD_RE = /service|laundry|health|beauty|barber|massage/;
+  // Backstops for a section nobody listed. `bar` carries word boundaries on
+  // purpose: without them "barber" reads as a wine bar and a haircut lands
+  // under Eat and Drink. Services is still tested FIRST for the same reason.
+  // `eat` is bounded because "weather notes" contains it, and an unbounded
+  // match filed a reference section under Eat and Drink. The existing
+  // fallback test caught that; the boundaries below are the reason it passes.
+  var EAT_KEYWORD_RE = /\beats?\b|food|dining|restaurant|caf|coffee|bakery|brunch|breakfast|lunch|dinner|dessert|wine|\bbars?\b|\bpubs?\b|\bdrinks?\b/;
+  var DO_KEYWORD_RE = /activit|sight|attraction|excursion|museum|gallery|beach|hike|trail|\btours?\b|entertainment|theat|cinema|concert|day.?trip|things.to.do/;
 
   function tabForSection(sec) {
     if (!sec) return 'info';
@@ -2044,7 +2064,12 @@ var CityOps = (function () {
     if (DO_SECTION_IDS.indexOf(id) !== -1) return 'do';
     if (SERVICE_SECTION_IDS.indexOf(id) !== -1) return 'services';
     if (INFO_SECTION_IDS.indexOf(id) !== -1) return 'info';
+    // Keyword backstops, known ids having already won. Services keeps its
+    // first-refusal position: its words (barber, health, beauty) overlap the
+    // eat and do vocabularies more than the other way round.
     if (SERVICE_KEYWORD_RE.test(id) || SERVICE_KEYWORD_RE.test(label)) return 'services';
+    if (EAT_KEYWORD_RE.test(id) || EAT_KEYWORD_RE.test(label)) return 'eat';
+    if (DO_KEYWORD_RE.test(id) || DO_KEYWORD_RE.test(label)) return 'do';
     return 'info'; // fallback bucket: an unrecognized section is reference, not a todo
   }
 
@@ -11457,8 +11482,20 @@ var CityOps = (function () {
   ];
   var TAB_IDS = TABS.map(function (t) { return t.id; });
 
-  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars'];
-  var DO_SECTION_IDS = ['activities', 'interests'];
+  // The ids PROMPT.md pins, plus the synonyms a model reaches for when it
+  // drifts off the contract. It does drift: a long schema contract is the first
+  // thing to slip on a run that has just been through a web-search tool loop,
+  // and the failure was silent because an unrecognised section falls to Info
+  // (see the fallback at the end of tabForSection). A traveler then opens Eat
+  // and Drink on a freshly generated city and finds it empty while every
+  // restaurant sits under Info, which reads as "generation failed" rather than
+  // "one word was wrong".
+  var EAT_SECTION_IDS = ['dinner', 'breakfast', 'lunch', 'coffee', 'restaurants', 'bars',
+    'eat', 'drink', 'drinks', 'food', 'dining', 'cafe', 'cafes', 'bakery', 'bakeries',
+    'brunch', 'nightlife'];
+  var DO_SECTION_IDS = ['activities', 'interests',
+    'do', 'see', 'sights', 'sightseeing', 'attractions', 'tours', 'excursions',
+    'daytrips', 'day-trips', 'museums', 'beaches'];
   // cowork moved here from EAT_SECTION_IDS (owner decision 2026-08-26).
   // A coworking space is a nomad utility, not a meal: filing it under Eat &
   // Drink put "day pass, 1500 ALL, fast wifi" between two dinner cards. A
@@ -11473,6 +11510,14 @@ var CityOps = (function () {
   // keyword fallback only fires for a section this list has never heard of.
   var INFO_SECTION_IDS = ['base', 'money', 'transport', 'safety', 'practical', 'logistics', 'context', 'corrections'];
   var SERVICE_KEYWORD_RE = /service|laundry|health|beauty|barber|massage/;
+  // Backstops for a section nobody listed. `bar` carries word boundaries on
+  // purpose: without them "barber" reads as a wine bar and a haircut lands
+  // under Eat and Drink. Services is still tested FIRST for the same reason.
+  // `eat` is bounded because "weather notes" contains it, and an unbounded
+  // match filed a reference section under Eat and Drink. The existing
+  // fallback test caught that; the boundaries below are the reason it passes.
+  var EAT_KEYWORD_RE = /\beats?\b|food|dining|restaurant|caf|coffee|bakery|brunch|breakfast|lunch|dinner|dessert|wine|\bbars?\b|\bpubs?\b|\bdrinks?\b/;
+  var DO_KEYWORD_RE = /activit|sight|attraction|excursion|museum|gallery|beach|hike|trail|\btours?\b|entertainment|theat|cinema|concert|day.?trip|things.to.do/;
 
   function tabForSection(sec) {
     if (!sec) return 'info';
@@ -11484,7 +11529,12 @@ var CityOps = (function () {
     if (DO_SECTION_IDS.indexOf(id) !== -1) return 'do';
     if (SERVICE_SECTION_IDS.indexOf(id) !== -1) return 'services';
     if (INFO_SECTION_IDS.indexOf(id) !== -1) return 'info';
+    // Keyword backstops, known ids having already won. Services keeps its
+    // first-refusal position: its words (barber, health, beauty) overlap the
+    // eat and do vocabularies more than the other way round.
     if (SERVICE_KEYWORD_RE.test(id) || SERVICE_KEYWORD_RE.test(label)) return 'services';
+    if (EAT_KEYWORD_RE.test(id) || EAT_KEYWORD_RE.test(label)) return 'eat';
+    if (DO_KEYWORD_RE.test(id) || DO_KEYWORD_RE.test(label)) return 'do';
     return 'info'; // fallback bucket: an unrecognized section is reference, not a todo
   }
 
@@ -19562,10 +19612,16 @@ Rules:
 - Return 10 to 18 new items in total, spread across the categories above so no
   single one dominates. Weight the count toward the traveler's interests where
   the city supports it.
-- Put each item in the section it belongs to. Use an existing section id from
-  the list below when the pick fits one (a dinner spot goes in the existing
-  dinner section). Create a new section only for a category the guide does not
-  have yet, with a short lowercase-slug id, a plain label, and one emoji icon.
+- Put each item in the section it belongs to, and use ONLY these section ids:
+  `dinner`, `breakfast`, `lunch`, `coffee`, `cowork`, `activities`, `services`,
+  `practical`, `interests`. These exact ids are what file an item under the
+  right tab in the app. Do NOT invent an id such as `food`, `eat`, `see` or
+  `do`: a section the app does not recognise is filed as reference material,
+  and the traveler opens Eat and Drink to find it empty. Map your picks onto
+  the list: bars and cafes go in `coffee` or `dinner`, sights and day trips go
+  in `activities`, a SIM or a pharmacy goes in `services`.
+- Include a section object in `sections` only for ids the guide does not
+  already have, with a plain label and one emoji icon.
 - Never return an item whose id is already in the list below, and never return
   the same place under a new id. New ids must be short slugs and unique against
   that list.
@@ -19583,11 +19639,11 @@ Respond with only a JSON code block in this shape, no prose:
 {
   "schema": 1,
   "delta": true,
-  "sections": [{"id": "do", "label": "Do", "icon": "🎯"}],
+  "sections": [{"id": "activities", "label": "Activities", "icon": "🎯"}],
   "items": [
     {
       "id": "new-slug",
-      "section": "do",
+      "section": "activities",
       "status": "plan",
       "name": "Real Place Name",
       "note": "Why it fits, with rating and review count if you have it.",
