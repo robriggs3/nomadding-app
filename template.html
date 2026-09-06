@@ -4595,6 +4595,16 @@ var CityOps = (function () {
   // On success `tolerant` says whether anything beyond a clean JSON.parse was
   // needed; the shells preview before committing when it is true, so the
   // path that has always worked keeps behaving exactly as it did.
+  // Shaped like a whole guide: it names a city and carries sections, and it is
+  // not claiming to be a delta. Deliberately structural rather than a full
+  // validation, because the point is to recognise what the traveler MEANT so
+  // the errors they get are about the box they wanted.
+  function looksWholeGuide(d) {
+    return !!d && typeof d === 'object' && d.delta !== true &&
+      !!d.city && typeof d.city === 'object' &&
+      (Array.isArray(d.sections) || Array.isArray(d.items));
+  }
+
   function intakeRead(text, opts) {
     opts = opts || {};
     var mode = opts.mode === 'delta' ? 'delta' : opts.mode === 'raw' ? 'raw' : 'city';
@@ -4625,12 +4635,24 @@ var CityOps = (function () {
       // The app already knows: the same bytes that fail as a delta are checked
       // against the guide schema, and if they pass, this is not a broken
       // payload at all, it is a correct one in the wrong door.
-      if (mode === 'delta' && checkPayload(s.data, 'city', opts).ok) {
+      if (mode === 'delta' && looksWholeGuide(s.data)) {
+        // Whether it is a PERFECT guide decides how much help we can give, not
+        // whether we recognise it. The first version of this only fired on a
+        // fully valid guide, so a guide with one schema slip fell through to
+        // the delta errors: the traveler was told "delta must be true" about a
+        // payload that was never meant to be a delta, and the real problem was
+        // hidden in a check nobody ran.
+        var asCity = checkPayload(s.data, 'city', opts);
         return { ok: false, data: null, route: s.route, repairs: s.repairs, tolerant: true,
-          found: 'json', errors: [], convertible: false, wrongBox: 'city',
-          message: 'That is a whole city guide, not a top-up, so it does not belong in this ' +
-            'box. Close this and use Update data instead, which replaces the city\'s research ' +
-            'with it. Everything you have already planned here would be replaced too.' };
+          found: 'json', errors: asCity.ok ? [] : asCity.errors, convertible: false,
+          wrongBox: 'city',
+          message: asCity.ok
+            ? 'That is a whole city guide, not a top-up, so it does not belong in this box. ' +
+              'Close this and use Update data instead, which replaces the city\'s research ' +
+              'with it. Everything you have already planned here would be replaced too.'
+            : 'That is a whole city guide, not a top-up, so it belongs in Update data rather ' +
+              'than here. It is not ready for that box yet either:\n- ' +
+              asCity.errors.join('\n- ') };
       }
       // The same mistake in the other direction: a delta pasted into the box
       // that replaces a city would silently wipe every section it omits.
