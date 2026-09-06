@@ -443,57 +443,76 @@ Deno.serve(async (req: Request) => {
   // app's own SSE parser is on the other end and has been since before this
   // function existed. The usage sniffing reads the same bytes on the way past
   // and changes none of them.
-  const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
   let sniff = "";
 
-  const out = new ReadableStream({
-    async pull(controller) {
-      let r: ReadableStreamReadResult<Uint8Array>;
-      try {
-        r = await reader.read();
-      } catch (e) {
-        controller.error(e);
-        await settle("error");
-        return;
+  // Read-only sniffing, on a bounded buffer: usage lives in message_start and
+  // message_delta, both small and both early or last, so the buffer is trimmed
+  // rather than grown across a 32k-token guide. Unchanged from the version
+  // that lived inside pull(); only where it is called from has moved.
+  function sniffBytes(bytes: Uint8Array) {
+    sniff += decoder.decode(bytes, { stream: true });
+    let idx: number;
+    while ((idx = sniff.indexOf("\n\n")) !== -1) {
+      const chunk = sniff.slice(0, idx);
+      sniff = sniff.slice(idx + 2);
+      for (const line of chunk.split("\n")) {
+        if (line.indexOf("data:") !== 0) continue;
+        try {
+          const p = JSON.parse(line.slice(5).trim());
+          if (p?.usage) addUsage(usage, p.usage);
+          if (p?.message?.usage) addUsage(usage, p.message.usage);
+        } catch { /* a partial or non-JSON data line tells us nothing */ }
       }
-      if (r.done) {
-        controller.close();
-        await settle("done");
-        return;
-      }
-      controller.enqueue(r.value);
+    }
+    if (sniff.length > 65536) sniff = sniff.slice(-4096);
+  }
 
-      // Read-only sniffing, on a bounded buffer: usage lives in message_start
-      // and message_delta, both small and both early or last, so the buffer is
-      // trimmed rather than grown across a 32k-token guide.
-      sniff += decoder.decode(r.value, { stream: true });
-      let idx: number;
-      while ((idx = sniff.indexOf("\n\n")) !== -1) {
-        const chunk = sniff.slice(0, idx);
-        sniff = sniff.slice(idx + 2);
-        for (const line of chunk.split("\n")) {
-          if (line.indexOf("data:") !== 0) continue;
-          try {
-            const p = JSON.parse(line.slice(5).trim());
-            if (p?.usage) addUsage(usage, p.usage);
-            if (p?.message?.usage) addUsage(usage, p.message.usage);
-          } catch { /* a partial or non-JSON data line tells us nothing */ }
-        }
-      }
-      if (sniff.length > 65536) sniff = sniff.slice(-4096);
-    },
-    async cancel() {
-      // The traveler pressed Cancel, or closed the tab. Stop Anthropic
-      // generating rather than paying for an answer nobody will read, and
-      // record what was actually produced up to here.
-      upstreamAbort.abort();
-      try { await reader.cancel(); } catch { /* already gone */ }
-      await settle("canceled");
+  // THE ISOLATE HAS TO BE TOLD TO STAY.
+  //
+  // This function used to return a ReadableStream whose pull() did the work.
+  // Supabase retires a worker the moment it looks idle, and idle is defined as
+  // "the HTTP response has been returned and no EdgeRuntime.waitUntil promise
+  // is outstanding" (Supabase troubleshooting, "Edge Functions worker timeouts",
+  // scenario 4). Returning the response satisfied the first half and there was
+  // never a waitUntil to satisfy the second, so the worker could be reclaimed
+  // before pull() had run once.
+  //
+  // Observed on 2026-09-06: a managed run reserved 32,000 tokens, returned 200
+  // in 1.4 seconds, recorded zero input and zero output tokens, and never
+  // settled, leaving the reservation held until the stale sweep charged it in
+  // full. Nothing reached the traveler.
+  //
+  // The documented shape is a TransformStream piped under waitUntil, which is
+  // what this is. The pipe also gives settle() a home that always runs: done on
+  // a clean end, canceled when the reader goes away or the pipe breaks. The old
+  // code settled inside pull() and cancel(), which is exactly the code that was
+  // not running.
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+      sniffBytes(chunk);
     },
   });
 
-  return new Response(out, {
+  const pumped = upstream.body.pipeTo(writable).then(
+    () => settle("done"),
+    async () => {
+      // The traveler pressed Cancel or closed the tab, or the upstream broke.
+      // Either way: stop Anthropic generating rather than paying for an answer
+      // nobody will read, and record what was actually produced up to here.
+      try { upstreamAbort.abort(); } catch { /* already aborted */ }
+      await settle("canceled");
+    },
+  );
+
+  // waitUntil is what keeps the worker alive for the pipe. It is absent under
+  // `deno test`, where there is no supervisor to tell, so the promise is simply
+  // left to run: the tests await the body themselves.
+  const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (rt && typeof rt.waitUntil === "function") rt.waitUntil(pumped);
+
+  return new Response(readable, {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream",
