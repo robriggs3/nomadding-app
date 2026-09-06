@@ -7146,6 +7146,30 @@ test('a published share carries the verdict tier, and the page renders it', () =
   assert.ok(page.indexOf('This page is a snapshot taken when the traveler pressed Publish') !== -1);
 });
 
+test('no em-dash or en-dash character ships anywhere', () => {
+  // House rule, and it had been broken in one file since the trip surface was
+  // imported: src/trip-shell.html carried 127 em-dashes and 11 en-dashes,
+  // identical on main, in CSS comments, code comments and user-visible copy.
+  // Nothing enforced it, so nothing noticed for weeks. This is the enforcement.
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const files = ['src/trip-shell.html', 'src/share-shell.html', 'src/app-shell.html',
+    'src/guide-shell.html', 'src/cityops.js', 'src/cityops.css', 'PROMPT.md', 'README.md',
+    'index.html', 'template.html', 'trip/index.html', 'share/index.html', 'example.html'];
+  const offenders = [];
+  files.forEach(function (rel) {
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    const hits = text.match(/[\u2014\u2013]/g);
+    if (hits) {
+      // Name the first line so the failure is actionable rather than a count.
+      const line = text.slice(0, text.search(/[\u2014\u2013]/)).split('\n').length;
+      offenders.push(rel + ' (' + hits.length + ', first at line ' + line + ')');
+    }
+  });
+  assert.deepEqual(offenders, [], 'em-dash or en-dash characters shipped in: ' + offenders.join(', '));
+});
+
 test('the AI copy says which path can actually search the web', () => {
   // Rewritten for B1. Until then NO in-app call declared a web-search tool and
   // this test pinned that. Now the OWN-KEY path does declare one, so the app
