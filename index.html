@@ -3870,6 +3870,40 @@ var CityOps = (function () {
   //   'ok'       - data is a valid city, ready for commitFromForm
   //   'not-json' - no parseable JSON found, direct or fenced
   //   'invalid'  - JSON parsed fine but failed schema validation
+  // ---- Why a link would not load (2026-09-06) ----
+  //
+  // QA note from the PR #4 review, finally earned. Load from link answered
+  // EVERY failure with the same sentence: "That site does not allow apps to
+  // read it; download the file and use a link from this site instead." True
+  // for a CORS refusal, and wrong for a typo, which is the commonest one: a
+  // 404 got told the site blocks apps, so the traveler went looking for a
+  // policy problem instead of a missing character in a URL.
+  //
+  // A status means the server answered, and an answering server is not a
+  // blocking one. No status means the request never completed, which is the
+  // only case the original sentence was ever about.
+  function linkErrorText(err) {
+    var status = err && typeof err.status === 'number' ? err.status : 0;
+    if (status === 404 || status === 410) {
+      return 'There is nothing at that link (' + status + '). The address is probably wrong: ' +
+        'check it character for character, and that it points at the file rather than a page about it.';
+    }
+    if (status === 401 || status === 403) {
+      return 'That link needs a login (' + status + '), so the app cannot read it. Use a link ' +
+        'that works in a private browser window, or download the file and paste it instead.';
+    }
+    if (status >= 500) {
+      return 'That site had an error (' + status + '). Nothing is wrong with the link or the ' +
+        'app: try again in a minute.';
+    }
+    if (status) {
+      return 'That link returned ' + status + ', so nothing could be read from it.';
+    }
+    return 'That request never completed, so the link was never read. Either this device is ' +
+      'offline, or the site does not allow apps to read it from another address. Download the ' +
+      'file and paste it here instead, which always works.';
+  }
+
   function fetchTextToCity(text) {
     var direct = parse(text);
     if (direct.data) return { data: direct.data, errors: [], kind: 'ok' };
@@ -9690,6 +9724,7 @@ var CityOps = (function () {
     },
     extractJsonBlock: extractJsonBlock, RETRY_INSTRUCTION: RETRY_INSTRUCTION,
     isJsonSyntaxError: isJsonSyntaxError, fetchTextToCity: fetchTextToCity,
+    linkErrorText: linkErrorText,
     // The ONE door every paste box in the product goes through. Tolerance
     // lives here and only here: what comes out still faces validate(),
     // validateItem() and mergeDelta() exactly as a hand-typed payload does.
@@ -13542,6 +13577,40 @@ var CityOps = (function () {
   //   'ok'       - data is a valid city, ready for commitFromForm
   //   'not-json' - no parseable JSON found, direct or fenced
   //   'invalid'  - JSON parsed fine but failed schema validation
+  // ---- Why a link would not load (2026-09-06) ----
+  //
+  // QA note from the PR #4 review, finally earned. Load from link answered
+  // EVERY failure with the same sentence: "That site does not allow apps to
+  // read it; download the file and use a link from this site instead." True
+  // for a CORS refusal, and wrong for a typo, which is the commonest one: a
+  // 404 got told the site blocks apps, so the traveler went looking for a
+  // policy problem instead of a missing character in a URL.
+  //
+  // A status means the server answered, and an answering server is not a
+  // blocking one. No status means the request never completed, which is the
+  // only case the original sentence was ever about.
+  function linkErrorText(err) {
+    var status = err && typeof err.status === 'number' ? err.status : 0;
+    if (status === 404 || status === 410) {
+      return 'There is nothing at that link (' + status + '). The address is probably wrong: ' +
+        'check it character for character, and that it points at the file rather than a page about it.';
+    }
+    if (status === 401 || status === 403) {
+      return 'That link needs a login (' + status + '), so the app cannot read it. Use a link ' +
+        'that works in a private browser window, or download the file and paste it instead.';
+    }
+    if (status >= 500) {
+      return 'That site had an error (' + status + '). Nothing is wrong with the link or the ' +
+        'app: try again in a minute.';
+    }
+    if (status) {
+      return 'That link returned ' + status + ', so nothing could be read from it.';
+    }
+    return 'That request never completed, so the link was never read. Either this device is ' +
+      'offline, or the site does not allow apps to read it from another address. Download the ' +
+      'file and paste it here instead, which always works.';
+  }
+
   function fetchTextToCity(text) {
     var direct = parse(text);
     if (direct.data) return { data: direct.data, errors: [], kind: 'ok' };
@@ -19362,6 +19431,7 @@ var CityOps = (function () {
     },
     extractJsonBlock: extractJsonBlock, RETRY_INSTRUCTION: RETRY_INSTRUCTION,
     isJsonSyntaxError: isJsonSyntaxError, fetchTextToCity: fetchTextToCity,
+    linkErrorText: linkErrorText,
     // The ONE door every paste box in the product goes through. Tolerance
     // lives here and only here: what comes out still faces validate(),
     // validateItem() and mergeDelta() exactly as a hand-typed payload does.
@@ -23100,19 +23170,21 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       if (!url) return;
       setLinkLoading(true);
       fetch(url).then(function (r) {
-        if (!r.ok) throw new Error('link ' + r.status);
+        // The status travels with the error, because a server that answered is
+        // not a server that blocked us, and those need different sentences.
+        if (!r.ok) { var e = new Error('link ' + r.status); e.status = r.status; throw e; }
         return r.text();
       }).then(function (text) {
         setLinkLoading(false);
         var read = CityOps.intakeKit.read(text, cityIntakeOpts());
         if (!read.ok) { msg.textContent = read.message; return; }
         commitFromForm(read.data);
-      }).catch(function () {
+      }).catch(function (e) {
         setLinkLoading(false);
-        // The one failure mode intake cannot see: the network call
-        // itself never completed (offline, DNS, or the server's CORS policy
-        // blocked the read from this origin).
-        msg.textContent = 'That site does not allow apps to read it; download the file and use a link from this site instead.';
+        // Every failure used to get the CORS sentence, including a 404. The
+        // status decides now; no status still means the request never
+        // completed, which is the only case that sentence was ever about.
+        msg.textContent = CityOps.linkErrorText(e);
       });
     };
     box.appendChild(el('p', 'diff', 'Or load from a link: a URL to a hosted city JSON file, a page with one in a code block, or a markdown guide.'));

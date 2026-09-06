@@ -2962,19 +2962,21 @@
       if (!url) return;
       setLinkLoading(true);
       fetch(url).then(function (r) {
-        if (!r.ok) throw new Error('link ' + r.status);
+        // The status travels with the error, because a server that answered is
+        // not a server that blocked us, and those need different sentences.
+        if (!r.ok) { var e = new Error('link ' + r.status); e.status = r.status; throw e; }
         return r.text();
       }).then(function (text) {
         setLinkLoading(false);
         var read = CityOps.intakeKit.read(text, cityIntakeOpts());
         if (!read.ok) { msg.textContent = read.message; return; }
         commitFromForm(read.data);
-      }).catch(function () {
+      }).catch(function (e) {
         setLinkLoading(false);
-        // The one failure mode intake cannot see: the network call
-        // itself never completed (offline, DNS, or the server's CORS policy
-        // blocked the read from this origin).
-        msg.textContent = 'That site does not allow apps to read it; download the file and use a link from this site instead.';
+        // Every failure used to get the CORS sentence, including a 404. The
+        // status decides now; no status still means the request never
+        // completed, which is the only case that sentence was ever about.
+        msg.textContent = CityOps.linkErrorText(e);
       });
     };
     box.appendChild(el('p', 'diff', 'Or load from a link: a URL to a hosted city JSON file, a page with one in a code block, or a markdown guide.'));

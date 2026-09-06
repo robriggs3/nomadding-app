@@ -6301,6 +6301,40 @@ test('a whole guide pasted into the top-up box is named, not graded', () => {
   assert.ok(junk.errors.length > 0, 'a broken payload lost its errors');
 });
 
+test('Load from link says which failure it was, not always CORS', () => {
+  // QA note from the PR #4 review. Every failure got the same sentence:
+  // "That site does not allow apps to read it". True for a CORS refusal and
+  // wrong for the commonest case, a typo, where a 404 sent the traveler
+  // looking for a policy problem instead of a missing character in a URL.
+  const withStatus = (n) => { const e = new Error('link ' + n); e.status = n; return e; };
+
+  // A server that ANSWERED is not a server that blocked us.
+  assert.ok(/nothing at that link \(404\)/.test(C.linkErrorText(withStatus(404))));
+  assert.ok(/address is probably wrong/.test(C.linkErrorText(withStatus(404))));
+  assert.ok(/needs a login \(403\)/.test(C.linkErrorText(withStatus(403))));
+  assert.ok(/needs a login \(401\)/.test(C.linkErrorText(withStatus(401))));
+  assert.ok(/site had an error \(503\)/.test(C.linkErrorText(withStatus(503))));
+  assert.ok(/try again/i.test(C.linkErrorText(withStatus(503))), 'a 5xx does not say it is temporary');
+  assert.ok(/returned 418/.test(C.linkErrorText(withStatus(418))), 'an unusual status loses its number');
+
+  // None of the answered cases may blame the site's policy.
+  [404, 403, 500, 418].forEach(function (n) {
+    assert.equal(/does not allow apps/.test(C.linkErrorText(withStatus(n))), false,
+      n + ' was still blamed on CORS');
+  });
+
+  // No status means the request never completed, which IS the case the old
+  // sentence was about, and it keeps it plus the offline reading.
+  const noStatus = C.linkErrorText(new Error('Failed to fetch'));
+  assert.ok(/never completed/.test(noStatus));
+  assert.ok(/offline/.test(noStatus), 'the offline reading is missing');
+  assert.ok(/does not allow apps/.test(noStatus), 'the CORS reading was lost');
+  // Never a dead end, same rule as every other refusal in this app.
+  assert.ok(/paste it here instead/.test(noStatus));
+  // And it survives being handed nothing at all.
+  assert.ok(C.linkErrorText(null).length > 20);
+});
+
 test('a request that never reached Anthropic does not read as an API error', () => {
   // Standing INBOX watch item since 2026-08-24, earned on 2026-09-06 when Rob
   // hit it on the Research pass with a key that was saved and fine. "Failed to
