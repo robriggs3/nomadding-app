@@ -6030,6 +6030,117 @@ asyncTest('callClaudeStream turns a streamed reply into the delta the Apply path
   });
 });
 
+// ---- B1: web search on the traveler's own key ----
+
+const DIRECT_PLAN = (apiKey) => Promise.resolve({
+  transport: 'direct',
+  url: 'https://api.anthropic.com/v1/messages',
+  headers: { 'x-api-key': apiKey, 'content-type': 'application/json' }
+});
+const PROXY_PLAN = () => Promise.resolve({
+  transport: 'proxy', url: 'https://x.functions.supabase.co/ai-proxy', headers: {}
+});
+
+test('shouldResume only continues a paused turn, and only so many times', () => {
+  assert.equal(C.aiProxyKit.shouldResume('pause_turn', 0), true);
+  assert.equal(C.aiProxyKit.shouldResume('pause_turn', C.aiProxyKit.SEARCH_MAX_CONTINUATIONS - 1), true);
+  // The stop that bounds the bill.
+  assert.equal(C.aiProxyKit.shouldResume('pause_turn', C.aiProxyKit.SEARCH_MAX_CONTINUATIONS), false);
+  // A finished turn is finished, however it finished.
+  assert.equal(C.aiProxyKit.shouldResume('end_turn', 0), false);
+  assert.equal(C.aiProxyKit.shouldResume('max_tokens', 0), false);
+  assert.equal(C.aiProxyKit.shouldResume(null, 0), false);
+  // Five searches, well under the server's own ten-iteration loop limit, so a
+  // normal run never needs the resume path at all.
+  assert.ok(C.aiProxyKit.SEARCH_MAX_USES < 10);
+});
+
+asyncTest('an own-key run declares web search; a managed run declares no tools', () => {
+  const events = [{ type: 'content_block_delta', delta: { type: 'text_delta', text: 'ok' } }];
+  let direct = null, proxy = null;
+  const callDirect = loadCallClaudeStream((url, opts) => {
+    direct = JSON.parse(opts.body);
+    return Promise.resolve({ ok: true, body: sseBody(events) });
+  }, true, DIRECT_PLAN);
+  const callProxy = loadCallClaudeStream((url, opts) => {
+    proxy = JSON.parse(opts.body);
+    return Promise.resolve({ ok: true, body: sseBody(events) });
+  }, true, PROXY_PLAN);
+  return callDirect('p', 'k', null).then(() => callProxy('p', 'k', null)).then(() => {
+    assert.deepEqual(direct.tools, [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }]);
+    // Our key must never quietly buy searches the output-token meter cannot see.
+    assert.equal(proxy.tools, undefined, 'the managed path grew a web-search tool');
+  });
+});
+
+asyncTest('a turn paused by the search loop is resumed with its own blocks, not a Continue message', () => {
+  // Run one searches, writes a fragment, and is cut off by the server's tool
+  // loop. Run two finishes. The traveler must end up with one whole answer.
+  const first = [
+    { type: 'content_block_start', index: 0,
+      content_block: { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: {} } },
+    { type: 'content_block_delta', index: 0,
+      delta: { type: 'input_json_delta', partial_json: '{"query":"Ohrid ' } },
+    { type: 'content_block_delta', index: 0,
+      delta: { type: 'input_json_delta', partial_json: 'cafes"}' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Half an answer. ' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'message_delta', delta: { stop_reason: 'pause_turn' } }
+  ];
+  const second = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'The rest.' } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' } }
+  ];
+  const bodies = [];
+  const call = loadCallClaudeStream((url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return Promise.resolve({ ok: true, body: sseBody(bodies.length === 1 ? first : second) });
+  }, true, DIRECT_PLAN);
+  const progress = [];
+  return call('THE PROMPT', 'k', (p) => progress.push(p)).then((text) => {
+    // One answer, both halves, in order.
+    assert.equal(text, 'Half an answer. The rest.');
+    assert.equal(bodies.length, 2, 'the paused turn was not resumed');
+    // The resume carries the user turn and the assistant's own content back,
+    // and NOTHING else: the server resumes off the trailing server_tool_use.
+    assert.equal(bodies[1].messages.length, 2);
+    assert.equal(bodies[1].messages[0].content, 'THE PROMPT');
+    assert.equal(bodies[1].messages[1].role, 'assistant');
+    const sent = bodies[1].messages[1].content;
+    assert.equal(sent[0].type, 'server_tool_use');
+    // The streamed partial_json was reassembled into a real input object.
+    assert.deepEqual(sent[0].input, { query: 'Ohrid cafes' });
+    assert.equal(sent[1].type, 'text');
+    assert.equal(sent[1].text, 'Half an answer. ');
+    assert.equal(JSON.stringify(bodies[1].messages).indexOf('Continue'), -1,
+      'a Continue message was added; the API resumes on its own');
+    // The wait is a lookup, and the traveler is told so.
+    assert.ok(progress.filter((p) => p.kind === 'searching').length >= 1);
+  });
+});
+
+asyncTest('a turn that keeps pausing is stopped rather than resumed forever', () => {
+  const paused = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x' } },
+    { type: 'message_delta', delta: { stop_reason: 'pause_turn' } }
+  ];
+  let calls = 0;
+  const call = loadCallClaudeStream(() => {
+    calls++;
+    return Promise.resolve({ ok: true, body: sseBody(paused) });
+  }, true, DIRECT_PLAN);
+  return call('p', 'k', null).then((text) => {
+    // The first run plus MAX_CONTINUATIONS resumes, and then it stops and hands
+    // back what it has rather than spending without end.
+    assert.equal(calls, C.aiProxyKit.SEARCH_MAX_CONTINUATIONS + 1);
+    assert.equal(text, 'x'.repeat(calls));
+  });
+});
+
 asyncTest('a Claude API error surfaces as a message the modal can show as-is', () => {
   const call = loadCallClaudeStream(() => Promise.resolve({
     ok: false, status: 401,
@@ -6581,18 +6692,37 @@ test('a published share carries the verdict tier, and the page renders it', () =
 });
 
 test('the AI copy says which path can actually search the web', () => {
-  // No in-app call declares a web-search tool, so Run with Claude answers from
-  // the model's own knowledge while the copy-to-chat path can go and look. The
-  // prompts ask for current hours, prices and ratings either way, so the
-  // difference has to be on screen.
+  // Rewritten for B1. Until then NO in-app call declared a web-search tool and
+  // this test pinned that. Now the OWN-KEY path does declare one, so the app
+  // really does look the city up, while our key still answers from memory until
+  // the tier that pays for search exists. What this guards is that the two
+  // never drift apart: the transport that gets the tool is the transport whose
+  // sentence claims the web.
   const fs = require('fs');
   const path = require('path');
   const root = path.join(__dirname, '..');
   const app = fs.readFileSync(path.join(root, 'src', 'app-shell.html'), 'utf8');
   const trip = fs.readFileSync(path.join(root, 'src', 'trip-shell.html'), 'utf8');
-  assert.equal(app.indexOf('tools:'), -1, 'an in-app call grew a tool declaration; update this copy');
-  assert.ok(app.indexOf("no web access") !== -1);
-  assert.ok(app.indexOf('search the web') !== -1);
+  // The shell asks the kit rather than hardcoding a tool list, which is what
+  // keeps the managed path tool-free in one place instead of two.
+  assert.ok(app.indexOf('CityOps.aiProxyKit.searchTools(plan.transport)') !== -1,
+    'the shell stopped deriving its tools from the transport');
+  assert.equal(app.indexOf("type: 'web_search"), -1,
+    'the shell grew its own web-search literal; the kit owns that decision');
+  // Own key searches, our key does not, and neither is a matter of opinion.
+  assert.deepEqual(C.aiProxyKit.searchTools('direct'),
+    [{ type: C.aiProxyKit.SEARCH_TOOL_TYPE, name: 'web_search',
+       max_uses: C.aiProxyKit.SEARCH_MAX_USES }]);
+  assert.equal(C.aiProxyKit.searchTools('proxy'), null, 'our key must not silently buy searches');
+  assert.equal(C.aiProxyKit.searchTools('none'), null);
+  // And the sentence matches the tool, for every transport.
+  assert.ok(C.aiProxyKit.searchNote('direct').indexOf('searches the web') !== -1);
+  assert.equal(C.aiProxyKit.searchNote('direct').indexOf('no web access'), -1,
+    'the own-key note still claims it cannot search');
+  assert.ok(C.aiProxyKit.searchNote('proxy').indexOf('no web access') !== -1);
+  assert.ok(C.aiProxyKit.searchNote('proxy').indexOf('search the web') !== -1,
+    'the managed note must still name the free path that can search');
+  // The trip surface was not part of B1 and still answers from memory.
   assert.ok(trip.indexOf('no web access') !== -1);
   // The Enrich modal closed with a promise that three working buttons above it
   // had already kept.
