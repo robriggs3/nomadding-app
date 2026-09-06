@@ -2393,6 +2393,74 @@ test('dayMoveOptions covers the whole stay and marks the day the item is on', ()
   // Every other date stays a live target.
   assert.equal(m.options.filter(o => !o.current).length, 7);
 });
+test('regenerating a lived-in city can add without emptying it', () => {
+  // The approved B1 follow-on. Generate for an existing city REPLACED it:
+  // commit() clears dataOverride so the fresh data wins outright, taking every
+  // hand-added place, rename and day assignment with it. Right for a blank
+  // scaffold, wrong for a city somebody is four days into.
+  const lived = {
+    schema: 1,
+    city: { name: 'Ohrid', country: 'MK', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [
+      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'done', name: 'Kaneo Letna Bavcha',
+        links: [], place_id: null, verified: null },
+      { id: 'my-own-find', section: 'dinner', status: 'plan', name: 'Place I found walking',
+        links: [], place_id: null, verified: null }
+    ]
+  };
+  // A regeneration: overlaps one pick, brings two new, and gets the header
+  // wrong in exactly the way Ohrid's did.
+  const regen = {
+    schema: 1,
+    city: { name: 'Ohrid', country: 'NOR', dates: { from: '2026-01-01', to: '2026-01-08' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }, { id: 'coffee', label: 'Coffee', icon: 'x' }],
+    items: [
+      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha',
+        links: [], place_id: null, verified: null },
+      { id: 'antico', section: 'dinner', status: 'plan', name: 'Antico', links: [], place_id: null, verified: null },
+      { id: 'a-cafe', section: 'coffee', status: 'plan', name: 'A cafe', links: [], place_id: null, verified: null }
+    ]
+  };
+
+  // The numbers the traveler is shown before choosing.
+  const choice = C.fillChoice(lived, regen);
+  assert.equal(choice.add, 2, 'wrong count of new places');
+  assert.equal(choice.keep, 1, 'the hand-added place was not counted as at risk');
+
+  const res = C.mergeDelta(lived, C.guideAsDelta(regen));
+  assert.deepEqual(res.errors, [], 'a generated guide could not be merged as a top-up');
+  assert.equal(res.summary.added, 2);
+  assert.equal(res.summary.skipped, 1, 'the overlapping pick was re-added rather than skipped');
+
+  // The whole point: what the traveler owns survives.
+  assert.ok(res.data.items.some(function (i) { return i.id === 'my-own-find'; }),
+    'the hand-added place was lost, which is the bug this fixes');
+  assert.equal(res.data.items.filter(function (i) { return i.id === 'kaneo-letna-bavcha'; })[0].status,
+    'done', 'progress on an existing pick was overwritten');
+
+  // The header is NOT taken from the regeneration. Ohrid came back with country
+  // NOR and January dates; a top-up must never rewrite a stay in progress.
+  assert.equal(res.data.city.country, 'MK', 'a top-up rewrote the country');
+  assert.equal(res.data.city.dates.from, '2026-09-05', 'a top-up rewrote the stay dates');
+  // And pin the mechanism that actually provides that, which is mergeDelta
+  // cloning the current city rather than guideAsDelta dropping the header. An
+  // earlier comment credited the wrong one; this fails if mergeDelta ever
+  // starts honouring a header on a delta.
+  const withHeader = C.guideAsDelta(regen);
+  withHeader.city = regen.city;
+  assert.equal(C.mergeDelta(lived, withHeader).data.city.country, 'MK',
+    'mergeDelta started taking the city header from a delta');
+  // New sections still arrive, or the new coffee pick would have nowhere to go.
+  assert.ok(res.data.sections.some(function (s) { return s.id === 'coffee'; }));
+
+  // guideAsDelta never lets a generated guide assert progress it cannot know.
+  const withDone = JSON.parse(JSON.stringify(regen));
+  withDone.items[1].status = 'done';
+  assert.equal(C.guideAsDelta(withDone).items.filter(function (i) { return i.id === 'antico'; }).length, 0,
+    'a generated guide was allowed to declare a place already done');
+});
+
 test('dayMoveOptions has no current day for an item with no day assigned', () => {
   const st = C.emptyState();
   const sisters = GOOD.items.find(i => i.id === 'sisters'); // backup, no day
@@ -6255,73 +6323,6 @@ test('a near-miss guide in the top-up box reports the guide errors, not the delt
   assert.equal(r.message.indexOf('delta must be true'), -1);
 });
 
-test('regenerating a lived-in city can add without emptying it', () => {
-  // The approved B1 follow-on. Generate for an existing city REPLACED it:
-  // commit() clears dataOverride so the fresh data wins outright, taking every
-  // hand-added place, rename and day assignment with it. Right for a blank
-  // scaffold, wrong for a city somebody is four days into.
-  const lived = {
-    schema: 1,
-    city: { name: 'Ohrid', country: 'MK', dates: { from: '2026-09-05', to: '2026-09-12' } },
-    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
-    items: [
-      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'done', name: 'Kaneo Letna Bavcha',
-        links: [], place_id: null, verified: null },
-      { id: 'my-own-find', section: 'dinner', status: 'plan', name: 'Place I found walking',
-        links: [], place_id: null, verified: null }
-    ]
-  };
-  // A regeneration: overlaps one pick, brings two new, and gets the header
-  // wrong in exactly the way Ohrid's did.
-  const regen = {
-    schema: 1,
-    city: { name: 'Ohrid', country: 'NOR', dates: { from: '2026-01-01', to: '2026-01-08' } },
-    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }, { id: 'coffee', label: 'Coffee', icon: 'x' }],
-    items: [
-      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha',
-        links: [], place_id: null, verified: null },
-      { id: 'antico', section: 'dinner', status: 'plan', name: 'Antico', links: [], place_id: null, verified: null },
-      { id: 'a-cafe', section: 'coffee', status: 'plan', name: 'A cafe', links: [], place_id: null, verified: null }
-    ]
-  };
-
-  // The numbers the traveler is shown before choosing.
-  const choice = C.fillChoice(lived, regen);
-  assert.equal(choice.add, 2, 'wrong count of new places');
-  assert.equal(choice.keep, 1, 'the hand-added place was not counted as at risk');
-
-  const res = C.mergeDelta(lived, C.guideAsDelta(regen));
-  assert.deepEqual(res.errors, [], 'a generated guide could not be merged as a top-up');
-  assert.equal(res.summary.added, 2);
-  assert.equal(res.summary.skipped, 1, 'the overlapping pick was re-added rather than skipped');
-
-  // The whole point: what the traveler owns survives.
-  assert.ok(res.data.items.some(function (i) { return i.id === 'my-own-find'; }),
-    'the hand-added place was lost, which is the bug this fixes');
-  assert.equal(res.data.items.filter(function (i) { return i.id === 'kaneo-letna-bavcha'; })[0].status,
-    'done', 'progress on an existing pick was overwritten');
-
-  // The header is NOT taken from the regeneration. Ohrid came back with country
-  // NOR and January dates; a top-up must never rewrite a stay in progress.
-  assert.equal(res.data.city.country, 'MK', 'a top-up rewrote the country');
-  assert.equal(res.data.city.dates.from, '2026-09-05', 'a top-up rewrote the stay dates');
-  // And pin the mechanism that actually provides that, which is mergeDelta
-  // cloning the current city rather than guideAsDelta dropping the header. An
-  // earlier comment credited the wrong one; this fails if mergeDelta ever
-  // starts honouring a header on a delta.
-  const withHeader = C.guideAsDelta(regen);
-  withHeader.city = regen.city;
-  assert.equal(C.mergeDelta(lived, withHeader).data.city.country, 'MK',
-    'mergeDelta started taking the city header from a delta');
-  // New sections still arrive, or the new coffee pick would have nowhere to go.
-  assert.ok(res.data.sections.some(function (s) { return s.id === 'coffee'; }));
-
-  // guideAsDelta never lets a generated guide assert progress it cannot know.
-  const withDone = JSON.parse(JSON.stringify(regen));
-  withDone.items[1].status = 'done';
-  assert.equal(C.guideAsDelta(withDone).items.filter(function (i) { return i.id === 'antico'; }).length, 0,
-    'a generated guide was allowed to declare a place already done');
-});
 
 test('a whole guide pasted into the top-up box is named, not graded', () => {
   // Rob, 2026-09-06: ran the full generation prompt, pasted the result into
