@@ -5913,6 +5913,59 @@ var CityOps = (function () {
       (Array.isArray(d.sections) || Array.isArray(d.items));
   }
 
+  // ---- Did the whole paste arrive? (2026-09-06) ----
+  //
+  // Rob pasted a 32KB guide, then a 16KB one, then a 3.9KB one, and each time
+  // got "no complete block in it would parse". The app then offered to CONVERT
+  // the text, which would have built a guide out of whatever fraction had
+  // arrived. Two of those pastes were cut at different points, and the file
+  // was valid every time: the preview pane he was copying from renders a
+  // bounded number of lines.
+  //
+  // The app could see this. A truncated object leaves its braces open, and
+  // that is arithmetic, not a guess. Saying "this is incomplete" costs one
+  // scan and turns an unexplainable failure into an instruction.
+  //
+  // Walks the text once, tracking string state so a brace inside a note is not
+  // counted as structure. Returns null when the text is balanced.
+  function truncationDetail(raw) {
+    var text = String(raw === null || raw === undefined ? '' : raw);
+    var depth = 0, inStr = false, esc = false, sawOpen = false, under = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (inStr) {
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{' || ch === '[') { depth++; sawOpen = true; }
+      else if (ch === '}' || ch === ']') { depth--; if (depth < 0) under = true; }
+    }
+    // Three ways a paste can be a fragment, and they need different sentences:
+    // it stops early (brackets left open), it starts late (more closers than
+    // openers, which is what a scrolled selection produces), or it ends inside
+    // a string. Counting how many places arrived was tried and removed: the
+    // same scan cannot tell a section from an item without parsing, and a
+    // confident wrong number is worse than no number.
+    if (!sawOpen && !under) return null;
+    if (depth === 0 && !inStr && !under) return null;
+    return { depth: depth, inString: inStr, startsLate: under, chars: text.length };
+  }
+
+  // The sentence a truncated paste gets instead of a parse complaint.
+  function truncationMessage(d) {
+    var what = d.startsLate
+      ? 'That paste starts partway into a file: it closes brackets it never opened'
+      : 'That paste stops early: it opens ' + d.depth + ' ' +
+        (d.depth === 1 ? 'bracket that is' : 'brackets that are') + ' never closed';
+    return what + (d.inString ? ', and it ends in the middle of a line of text' : '') +
+      '. Nothing was applied, because a fragment would replace a whole guide. Copy the file ' +
+      'again and check you have all of it, first character to last: a preview pane often ' +
+      'renders only the first screenful, so open the file itself and select all of it there.';
+  }
+
   function intakeRead(text, opts) {
     opts = opts || {};
     var mode = opts.mode === 'delta' ? 'delta' : opts.mode === 'raw' ? 'raw' : 'city';
@@ -6019,6 +6072,16 @@ var CityOps = (function () {
     }
 
     if (looksJson(raw)) {
+      // Incomplete is a different failure from malformed, and it is the one
+      // with an instruction attached. Checked FIRST, and convertible is false:
+      // converting a fragment would quietly build a guide from the part that
+      // happened to arrive, which is worse than refusing.
+      var cut = truncationDetail(raw);
+      if (cut) {
+        return { ok: false, data: null, route: null, repairs: [], tolerant: false,
+          found: 'json', errors: [], convertible: false, truncated: true,
+          message: truncationMessage(cut) };
+      }
       return { ok: false, data: null, route: null, repairs: [], tolerant: false,
         found: 'json', errors: structuredErrors || [], convertible: mode !== 'raw',
         message: 'This looks like JSON but no complete block in it would parse, ' +
@@ -10830,6 +10893,7 @@ var CityOps = (function () {
     // lives here and only here: what comes out still faces validate(),
     // validateItem() and mergeDelta() exactly as a hand-typed payload does.
     intakeKit: {
+      truncationDetail: truncationDetail,
       read: intakeRead, structured: readStructured, repair: repairCandidate,
       markdownToCity: markdownToCity, markdownToDelta: markdownToDelta,
       conversionPrompt: conversionPrompt, NEXT_STEP: INTAKE_NEXT_STEP,

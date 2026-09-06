@@ -6255,6 +6255,63 @@ test('a near-miss guide in the top-up box reports the guide errors, not the delt
   assert.equal(r.message.indexOf('delta must be true'), -1);
 });
 
+test('an incomplete paste is named as incomplete, not graded as bad JSON', () => {
+  // 2026-09-06: Rob pasted a 32KB guide, then 16KB, then 3.9KB, and each time
+  // got "no complete block in it would parse" plus an offer to CONVERT the
+  // text. Every file was valid; the preview pane he copied from renders a
+  // bounded number of lines. Converting a fragment would have built a guide
+  // from whatever arrived, which is how you lose a city quietly.
+  const whole = JSON.stringify({
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [
+      { id: 'a', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha',
+        note: 'Braces { and } inside a note must not be counted as structure.',
+        links: [], place_id: null, verified: null },
+      { id: 'b', section: 'dinner', status: 'plan', name: 'Antico', links: [], place_id: null, verified: null }
+    ]
+  }, null, 2);
+
+  // The whole thing still works. This is the assertion that keeps the guard
+  // from becoming a wall.
+  assert.equal(C.intakeKit.read(whole, { mode: 'city' }).ok, true, 'the guard refused a complete paste');
+  assert.equal(C.intakeKit.truncationDetail(whole), null);
+
+  // Stops early: the shape of a preview that rendered the first screenful.
+  const head = C.intakeKit.read(whole.slice(0, Math.floor(whole.length * 0.6)), { mode: 'city' });
+  assert.equal(head.truncated, true, 'a half paste was not recognised as incomplete');
+  assert.ok(/stops early/.test(head.message));
+  // The important half: it must NOT offer to convert a fragment.
+  assert.equal(head.convertible, false, 'a fragment was offered to the converter');
+  assert.equal(head.message.indexOf('no complete block'), -1, 'still grading it as bad JSON');
+  // And it says what to do about it.
+  assert.ok(/preview pane|select all/.test(head.message));
+
+  // Starts late: what a scrolled selection produces, which is the other shape
+  // Rob actually hit. Cut on a line boundary, the way a preview pane does,
+  // rather than mid-string, so this exercises the closers-without-openers path
+  // and not the ends-inside-a-string one.
+  const lines = whole.split('\n');
+  const tailText = lines.slice(Math.floor(lines.length * 0.7)).join('\n');
+  const tail = C.intakeKit.read(tailText, { mode: 'city' });
+  assert.equal(tail.truncated, true, 'a tail-only paste was not recognised');
+  assert.equal(C.intakeKit.truncationDetail(tailText).startsLate, true);
+  assert.ok(/starts partway/.test(tail.message));
+  assert.equal(tail.convertible, false);
+
+  // Ends inside a string: cut mid-note rather than mid-structure.
+  const midString = whole.slice(0, whole.indexOf('must not be counted'));
+  const ms = C.intakeKit.truncationDetail(midString);
+  assert.ok(ms && ms.inString, 'a cut inside a string was not seen');
+
+  // Genuinely malformed but COMPLETE json keeps the old message, because there
+  // the parse complaint is the true one and there is nothing to re-copy.
+  const malformed = '{"schema":1,"city":{"name":"Ohrid"},"items":[{"id":,}]}';
+  const bad = C.intakeKit.read(malformed, { mode: 'city' });
+  assert.notEqual(bad.truncated, true, 'balanced-but-broken JSON was called truncated');
+});
+
 test('a whole guide pasted into the top-up box is named, not graded', () => {
   // Rob, 2026-09-06: ran the full generation prompt, pasted the result into
   // Enrich, and got "delta must be true: this is a partial payload, not a
