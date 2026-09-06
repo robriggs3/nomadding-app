@@ -1997,6 +1997,82 @@ test('tabForSection: known info ids win over the services keyword fallback (real
   // explicit info ids must be checked first.
   assert.equal(C.tabForSection({ id: 'safety', label: 'Health & safety' }), 'info');
 });
+// ---- spreadPlan: give the Plan tab something to show (2026-09-06) ----
+
+const SPREAD_CITY = {
+  schema: 1,
+  city: { name: 'Ohrid', dates: { from: '2026-09-06', to: '2026-09-10' } },
+  sections: [
+    { id: 'dinner', label: 'Dinner' },
+    { id: 'activities', label: 'Activities' },
+    { id: 'coffee', label: 'Coffee' }
+  ],
+  items: [
+    { id: 'd1', section: 'dinner', status: 'plan', name: 'D1', links: [] },
+    { id: 'd2', section: 'dinner', status: 'plan', name: 'D2', links: [] },
+    { id: 'dFixed', section: 'dinner', status: 'plan', name: 'Market night', day: '2026-09-08', links: [] },
+    { id: 'dSpare', section: 'dinner', status: 'backup', name: 'Spare', links: [] },
+    { id: 'a1', section: 'activities', status: 'plan', name: 'A1', links: [] },
+    { id: 'c1', section: 'coffee', status: 'plan', name: 'Coffee', links: [] }
+  ]
+};
+
+test('spreadPlan fills blank days and never touches one already set', () => {
+  const r = C.spreadPlan(SPREAD_CITY, C.emptyState(), {});
+  const byId = {};
+  r.assignments.forEach((a) => { byId[a.id] = a.day; });
+  // The owner ruling: fill blanks only. A pick the model deliberately dated
+  // (a market that only runs that night) is the one a re-spread would ruin.
+  assert.equal(byId.dFixed, undefined, 'an already-dated pick was re-dated');
+  // And the day it holds is not handed to anything else of the same kind.
+  assert.notEqual(byId.d1, '2026-09-08');
+  assert.notEqual(byId.d2, '2026-09-08');
+  // Blanks get filled, in the order the model emitted them.
+  assert.equal(byId.d1, '2026-09-06');
+  assert.equal(byId.d2, '2026-09-07');
+  assert.equal(byId.a1, '2026-09-06');
+});
+
+test('spreadPlan dates only what should carry a day', () => {
+  const r = C.spreadPlan(SPREAD_CITY, C.emptyState(), {});
+  const ids = r.assignments.map((a) => a.id);
+  // Backups are spares, not plans: dating one would put a fallback on a night
+  // the traveler never chose it for.
+  assert.equal(ids.indexOf('dSpare'), -1, 'a backup was given a day');
+  // Coffee, breakfast and lunch repeat daily. PROMPT.md says so and the
+  // spread has to agree, or every morning coffee lands on one arbitrary date.
+  assert.equal(ids.indexOf('c1'), -1, 'coffee was given a day');
+});
+
+test('spreadPlan does not assign days that have already gone', () => {
+  // Rob landed in Ohrid mid-stay. Spreading dinners onto dates that have
+  // passed is worse than leaving them blank.
+  const r = C.spreadPlan(SPREAD_CITY, C.emptyState(), { today: '2026-09-09' });
+  assert.deepEqual(r.days, ['2026-09-09', '2026-09-10']);
+  r.assignments.forEach((a) => {
+    assert.ok(a.day >= '2026-09-09', a.id + ' was dated ' + a.day + ', already gone');
+  });
+});
+
+test('spreadPlan proposes without mutating, and counts what is left over', () => {
+  const before = JSON.stringify(SPREAD_CITY);
+  const st = C.emptyState();
+  const r = C.spreadPlan(SPREAD_CITY, st, {});
+  // It proposes. Writing goes through setDay like every other day change.
+  assert.equal(JSON.stringify(SPREAD_CITY), before, 'spreadPlan mutated the city');
+  assert.deepEqual(st.itemDay, {}, 'spreadPlan wrote into state');
+  assert.ok(r.assignments.length > 0);
+  // Two dinners for four open evenings leaves nothing over; a fifth dinner
+  // would. The count is what the UI uses to say "3 still unplaced".
+  assert.equal(typeof r.undatedLeft, 'number');
+  const many = JSON.parse(before);
+  for (let i = 0; i < 9; i++) {
+    many.items.push({ id: 'x' + i, section: 'dinner', status: 'plan', name: 'X' + i, links: [] });
+  }
+  assert.ok(C.spreadPlan(many, C.emptyState(), {}).undatedLeft > 0,
+    'more dinners than evenings should leave some unplaced');
+});
+
 test('tabForSection: itinerary and any tasks section route to Plan', () => {
   assert.equal(C.tabForSection({ id: 'itinerary', label: 'Daily plan' }), 'plan');
   assert.equal(C.tabForSection({ id: 'tasks', label: 'Open items' }), 'plan');

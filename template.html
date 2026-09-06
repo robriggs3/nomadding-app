@@ -1772,6 +1772,114 @@ var CityOps = (function () {
   // succeed: it rewrites the same value, re-renders, and looks exactly like
   // a control that did nothing. On a phone, where there is no hover tooltip
   // to explain the icon in the first place, one such no-op tap is enough to
+  // ---- Spreading undated picks across the stay (2026-09-06) ----
+  //
+  // PROMPT.md asks for one dinner per evening and one anchor activity per day,
+  // dated. Generate used to deliver that and stopped: a run that has been
+  // through a web-search tool loop drifts off the long parts of a schema
+  // contract first, and dating every pick is one of those parts. The Plan tab
+  // then opens empty on a freshly researched city, and the drag and day-move
+  // controls have nothing to render on, so the whole planning surface reads as
+  // broken.
+  //
+  // The fix lives here rather than in the prompt, because asking harder is the
+  // approach we already have evidence against.
+  //
+  // FILL BLANKS ONLY (owner ruling 2026-09-06). An item that already carries a
+  // day keeps it, whether the model dated it or the traveler did. A market that
+  // only runs on Tuesday is exactly the pick a re-spread would ruin, and it is
+  // also the pick a model is most likely to have got right.
+  //
+  // This proposes and does not mutate: it returns the assignments, and the
+  // caller writes them through setDay like every other day change, so there is
+  // one place that ever moves an item to a day.
+  //
+  // What it cannot do: group by geography. Items carry no coordinates (see
+  // validateItem), so "put the two things near each other on the same day" is
+  // not derivable from the data. What it does instead is keep the model's own
+  // order, which is the closest thing to its intent that survives: it was told
+  // to match each evening's dinner to that day's activity, and the order it
+  // emitted them in is where that pairing lives.
+  var SPREAD_KINDS = [
+    // One per evening. Matched on id first, then on what the section calls
+    // itself, so a guide that came back with "Evening meals" still spreads.
+    { kind: 'dinner', perDay: 1, test: function (sec) {
+      var id = String(sec && sec.id || '').toLowerCase();
+      var label = String(sec && sec.label || '').toLowerCase();
+      return id === 'dinner' || /dinner|evening meal|supper/.test(id + ' ' + label);
+    } },
+    // One anchor per day: the single trip into town the profile allows for.
+    { kind: 'anchor', perDay: 1, test: function (sec) {
+      return tabForSection(sec) === 'do';
+    } }
+  ];
+
+  // data, state, opts {today} -> { assignments: [{id, day, kind}], days: [iso],
+  //                               undatedLeft: n }
+  // `today` trims days already gone: a traveler who lands on the fourth night
+  // does not want three of their dinners assigned to dates that have passed.
+  function spreadPlan(data, state, opts) {
+    var o = opts || {};
+    var st = state || emptyState();
+    var range = effectiveDates(data, st);
+    var days = stayDates(range);
+    if (o.today) {
+      var future = days.filter(function (iso) { return iso >= o.today; });
+      // Only trim when something is left: a stay entirely in the past still
+      // spreads across itself rather than returning nothing at all.
+      if (future.length) days = future;
+    }
+    var secById = {};
+    (data && Array.isArray(data.sections) ? data.sections : []).forEach(function (s) {
+      if (s && s.id) secById[s.id] = s;
+    });
+    var items = (data && Array.isArray(data.items) ? data.items : []);
+
+    // What each day already holds, per kind, so an existing assignment is
+    // counted rather than doubled.
+    var taken = {};
+    SPREAD_KINDS.forEach(function (k) { taken[k.kind] = {}; });
+    function kindOf(it) {
+      var sec = secById[it.section];
+      for (var i = 0; i < SPREAD_KINDS.length; i++) {
+        if (SPREAD_KINDS[i].test(sec)) return SPREAD_KINDS[i];
+      }
+      return null;
+    }
+    items.forEach(function (it) {
+      if (!it || !it.id) return;
+      var day = effectiveDay(it, st);
+      if (!day) return;
+      var k = kindOf(it);
+      if (!k) return;
+      taken[k.kind][day] = (taken[k.kind][day] || 0) + 1;
+    });
+
+    var assignments = [];
+    var undatedLeft = 0;
+    SPREAD_KINDS.forEach(function (k) {
+      // Order is the model's own, which is the only record of which dinner it
+      // meant to sit beside which afternoon.
+      var queue = items.filter(function (it) {
+        if (!it || !it.id) return false;
+        if (effectiveDay(it, st)) return false;              // fill blanks only
+        if (effectiveStatus(it, st) !== 'plan') return false; // backups stay spare
+        var mine = kindOf(it);
+        return !!mine && mine.kind === k.kind;
+      });
+      var qi = 0;
+      days.forEach(function (iso) {
+        var already = taken[k.kind][iso] || 0;
+        while (already < k.perDay && qi < queue.length) {
+          assignments.push({ id: queue[qi].id, day: iso, kind: k.kind });
+          qi++; already++;
+        }
+      });
+      undatedLeft += Math.max(0, queue.length - qi);
+    });
+    return { assignments: assignments, days: days, undatedLeft: undatedLeft };
+  }
+
   // conclude the whole feature is broken. Matching on KEY (not iso) is
   // deliberate: after a slot reorder an item's stored day-key can differ
   // from the date it renders under, and "the day you are on" means the one
@@ -6816,6 +6924,33 @@ var CityOps = (function () {
     rerender();
   }
 
+  // Runs spreadPlan and writes the result. Every assignment goes through
+  // keyForDisplayedDate and setDay, exactly as a hand move does: after a slot
+  // reorder an item's stored day-key is not always its ISO date, and a second
+  // way of writing a day is how those two drift apart.
+  //
+  // Returns what it did so the caller can say it in words. Nothing is written
+  // when there is nothing to place, so the control can be offered without
+  // it ever being a no-op that looks like a failure.
+  function applySpreadPlan() {
+    var st = ctx.store.load();
+    var data = effectiveData(ctx.base, st);
+    var res = spreadPlan(data, st, { today: todayIso() });
+    if (!res.assignments.length) return res;
+    var byId = {};
+    (Array.isArray(data.items) ? data.items : []).forEach(function (it) {
+      if (it && it.id) byId[it.id] = it;
+    });
+    res.assignments.forEach(function (a) {
+      var it = byId[a.id];
+      if (!it) return;
+      setDay(st, a.id, keyForDisplayedDate(data, st, it.section, a.day));
+    });
+    ctx.store.save(st);
+    rerender();
+    return res;
+  }
+
   // Scrolls the just-moved card back under the traveler's eyes and flashes it
   // once, so a day move has a visible result instead of the card vanishing
   // upward or downward out of the viewport. Deliberately looks the card up by
@@ -9457,7 +9592,7 @@ var CityOps = (function () {
     orderSectionItems: orderSectionItems, setSectionItemOrder: setSectionItemOrder,
     sectionItemOrderFor: sectionItemOrderFor,
     // Plan-tab per-item day moves: the picker's own pure model.
-    dayMoveOptions: dayMoveOptions,
+    dayMoveOptions: dayMoveOptions, spreadPlan: spreadPlan, applySpreadPlan: applySpreadPlan,
     // The More sheet's clustering, pure so the grouping and the within-group
     // order are testable without a DOM. renderSheetInto is the DOM half, shared
     // with the trip surface so its More menu and its stop switcher cannot drift
