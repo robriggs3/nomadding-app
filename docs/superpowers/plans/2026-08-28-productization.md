@@ -9,7 +9,7 @@ independently and the product works between phases.
 
 ## Context for the executing agent
 
-- Repo: github.com/robriggs3/cityops, public. Pages serves app.nomadding.com
+- Repo: github.com/robriggs3/nomadding-app, public. Pages serves app.nomadding.com
   from main root. Every push to main deploys.
 - Two surfaces, one shared header: `/` (cities app, from src/app-shell.html) and
   `/trip.html` (trip planner, from src/trip-shell.html). tools/assemble.js emits
