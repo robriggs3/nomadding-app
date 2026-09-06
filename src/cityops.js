@@ -3740,6 +3740,32 @@ var CityOps = (function () {
           found: 'json', errors: [], stats: null,
           message: intakeSummary(s.data, mode) + '.' };
       }
+      // The commonest paste mistake in the product, and until 2026-09-06 the
+      // app answered it with schema grammar. Two boxes look alike and take
+      // different payloads: Enrich takes a top-up, Update data takes a whole
+      // guide. Somebody who ran the full generation prompt and pasted the
+      // result into Enrich was told "delta must be true", which is true, is
+      // useless, and does not name the box that would have accepted it.
+      //
+      // The app already knows: the same bytes that fail as a delta are checked
+      // against the guide schema, and if they pass, this is not a broken
+      // payload at all, it is a correct one in the wrong door.
+      if (mode === 'delta' && checkPayload(s.data, 'city', opts).ok) {
+        return { ok: false, data: null, route: s.route, repairs: s.repairs, tolerant: true,
+          found: 'json', errors: [], convertible: false, wrongBox: 'city',
+          message: 'That is a whole city guide, not a top-up, so it does not belong in this ' +
+            'box. Close this and use Update data instead, which replaces the city\'s research ' +
+            'with it. Everything you have already planned here would be replaced too.' };
+      }
+      // The same mistake in the other direction: a delta pasted into the box
+      // that replaces a city would silently wipe every section it omits.
+      if (mode === 'city' && checkPayload(s.data, 'delta', opts).ok) {
+        return { ok: false, data: null, route: s.route, repairs: s.repairs, tolerant: true,
+          found: 'json', errors: [], convertible: false, wrongBox: 'delta',
+          message: 'That is a top-up, not a whole city guide. Using it here would replace the ' +
+            'city with only the handful of items it holds. Close this and use Enrich instead, ' +
+            'which merges it in and leaves your plans alone.' };
+      }
       // A payload that was clearly aiming at the schema gets its own errors
       // reported. Running the markdown extractor over a near-miss guide would
       // replace a precise answer with a vague one.

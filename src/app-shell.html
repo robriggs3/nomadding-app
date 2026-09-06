@@ -1902,6 +1902,13 @@
     m.box.appendChild(chipRow);
     m.box.appendChild(passDesc);
     m.box.appendChild(actRow);
+    // The status line sits WITH the buttons, not below the textarea. It used to
+    // render after the paste box, so a run that failed set its message a
+    // screenful down and out of view: the traveler pressed Run with Claude,
+    // watched nothing happen, and had no way to know an error had been written
+    // at all. Compacting the sheet made that worse, not better, because the
+    // buttons moved up and the message did not.
+    m.box.appendChild(msg);
 
     function drawPass() {
       var p = passFor(passKind);
@@ -1955,7 +1962,6 @@
     var ta = document.createElement('textarea');
     ta.setAttribute('aria-label', 'Delta from your AI, as JSON or markdown');
     m.box.appendChild(ta);
-    m.box.appendChild(msg);
 
     var row = el('div', 'mrow');
     var apply = el('button', 'ctl to-done', 'Apply');

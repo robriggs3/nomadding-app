@@ -6227,6 +6227,52 @@ test('the Enrich modal offers one chooser and one row of buttons', () => {
   assert.ok(/interests' && profileEmpty/.test(modal), 'the profile gate moved off the interests pass');
 });
 
+test('a whole guide pasted into the top-up box is named, not graded', () => {
+  // Rob, 2026-09-06: ran the full generation prompt, pasted the result into
+  // Enrich, and got "delta must be true: this is a partial payload, not a
+  // whole guide". True, useless, and it never named the box that would have
+  // taken it. Two boxes look alike and accept different payloads; the app
+  // already knows which is which and should say so.
+  const guide = {
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [{ id: 'a', section: 'dinner', status: 'plan', name: 'A', links: [],
+              place_id: null, verified: null }]
+  };
+  const existing = {
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }], items: []
+  };
+  const r = C.intakeKit.read(JSON.stringify(guide), { mode: 'delta', existing: existing });
+  assert.equal(r.ok, false, 'a whole guide must not apply as a top-up');
+  assert.equal(r.wrongBox, 'city');
+  assert.ok(/whole city guide/.test(r.message));
+  assert.ok(/Update data/.test(r.message), 'the message does not name the box that would take it');
+  // And it warns what that box costs, because Update data replaces.
+  assert.ok(/replaced/.test(r.message));
+  // The schema grammar is gone from the traveler's screen.
+  assert.equal(r.message.indexOf('delta must be true'), -1);
+
+  // The same mistake the other way costs more, because it would silently drop
+  // every section the delta omits.
+  const delta = { schema: 1, delta: true, items: [{ id: 'b', section: 'dinner',
+    status: 'plan', name: 'B', links: [], place_id: null, verified: null }] };
+  const r2 = C.intakeKit.read(JSON.stringify(delta), { mode: 'city' });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.wrongBox, 'delta');
+  assert.ok(/Enrich/.test(r2.message), 'the message does not name Enrich');
+
+  // A payload that is genuinely broken still gets its real errors, since there
+  // is no other box that would have accepted it either.
+  const junk = C.intakeKit.read('{"schema":1,"delta":true,"items":[{"id":"x"}]}',
+    { mode: 'delta', existing: existing });
+  assert.equal(junk.ok, false);
+  assert.equal(junk.wrongBox, undefined, 'a broken payload was mistaken for a misrouted one');
+  assert.ok(junk.errors.length > 0, 'a broken payload lost its errors');
+});
+
 test('a request that never reached Anthropic does not read as an API error', () => {
   // Standing INBOX watch item since 2026-08-24, earned on 2026-09-06 when Rob
   // hit it on the Research pass with a key that was saved and fine. "Failed to
