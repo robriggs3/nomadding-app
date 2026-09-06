@@ -1107,7 +1107,7 @@
   // already display it, but it is not offered for sale, because taking 29 USD a
   // month for a capability that is not built is a lie with a price on it. Flip
   // this the day the proxy ships.
-  var BILLING_MANAGED_LIVE = false;
+  var BILLING_MANAGED_LIVE = true;
 
   function checkoutUrl(tier) {
     var base = tier === 'managed' ? BILLING.managed : BILLING.byok;
