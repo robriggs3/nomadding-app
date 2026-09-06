@@ -7077,15 +7077,25 @@ test('no gate or summary copy carries pressure, scarcity or an em-dash', () => {
 // set the ANTHROPIC_API_KEY secret. Until both are done, a managed subscriber's
 // every AI call would refuse, so the tier stays unsellable. The flip is three
 // lines and they are named in the build report.
-test('the managed tier stays unsellable until its allowance table and key exist', () => {
+test('both paid tiers are sellable, priced, and never a dead control', () => {
+  // Rewritten 2026-09-06. This used to assert the managed tier was NOT
+  // sellable, and it was right to: until the allowance table and the key
+  // existed, every call it made would have refused. Rob ran
+  // docs/sql/2026-09-04-ai-usage.sql (verified: both tables, three functions,
+  // zero rows) and set ANTHROPIC_API_KEY, so the condition it was guarding is
+  // met and the guard moves to the next thing that could go wrong: a tier
+  // offered for sale without a price or without somewhere to pay.
   const plans = E.plans();
   const byok = plans.filter(function (p) { return p.tier === 'byok'; })[0];
   const managed = plans.filter(function (p) { return p.tier === 'managed'; })[0];
-  assert.ok(byok && byok.sellable, 'the 15 USD tier works today and is sellable');
-  assert.ok(managed && !managed.sellable,
-    'the 29 USD tier runs AI on OUR key. The proxy is deployed, but until the AI ' +
-    'allowance SQL is run and ANTHROPIC_API_KEY is set, every call it makes would ' +
-    'refuse. Selling that would be selling a capability that does not work.');
+  assert.ok(byok && byok.sellable, 'the 15 USD tier is sellable');
+  assert.ok(managed && managed.sellable, 'the 29 USD tier is sellable now that its server can answer');
+  // A price on every sellable plan: a buy button with no number beside it is
+  // the thing this file has refused to ship since Phase C.
+  plans.filter(function (p) { return p.sellable; }).forEach(function (p) {
+    assert.ok(p.price && /\d/.test(p.price), p.tier + ' is sellable with no price');
+    assert.ok(p.name && p.blurb, p.tier + ' is sellable with nothing said about it');
+  });
 });
 // ---- the localhost-only state mock ----
 //
@@ -7461,16 +7471,27 @@ test("no shipped surface can mock a plan state off localhost", () => {
   });
 });
 
-test("the managed tier is not offered for sale in any shipped surface", () => {
+test("the managed tier is live, and both shells agree that it is", () => {
+  // Rewritten 2026-09-06 alongside its sibling above, for the same reason: the
+  // SQL is run and the key is set, so the tier is live. What replaces the old
+  // assertion is the failure this pair of constants invites. The flag is
+  // declared SEPARATELY in each shell, so the two can disagree, and a traveler
+  // would then be offered the plan on one surface and not the other with no
+  // error anywhere. Asserting they match is cheaper than finding that in the
+  // wild.
   const fs2 = require("fs"); const path2 = require("path");
   const root2 = path2.join(__dirname, "..");
+  const seen = {};
   ["index.html", "trip/index.html"].forEach(function (rel) {
     const html = fs2.readFileSync(path2.join(root2, rel), "utf8");
-    assert.ok(/BILLING_MANAGED_LIVE = false/.test(html),
-      rel + ": the 29 USD tier runs AI on OUR key. The proxy is deployed, but it " +
-      "cannot answer until the AI allowance SQL is run and ANTHROPIC_API_KEY is set. " +
-      "It must stay unsellable until both are done.");
+    const m = /BILLING_MANAGED_LIVE = (true|false)/.exec(html);
+    assert.ok(m, rel + ": the managed-tier flag went missing from the shipped bytes");
+    seen[rel] = m[1];
+    assert.equal(m[1], "true",
+      rel + ": the managed tier is live (allowance table run, ANTHROPIC_API_KEY set).");
   });
+  assert.equal(seen["index.html"], seen["trip/index.html"],
+    "the two shells disagree about whether the managed tier is on sale");
 });
 
 
