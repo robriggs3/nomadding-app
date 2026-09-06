@@ -189,6 +189,62 @@ var CityOps = (function () {
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  // ---- Filling an existing city without emptying it (2026-09-06) ----
+  //
+  // Generating for a city that already exists REPLACES it: commit() clears
+  // dataOverride so the fresh data "wins outright", which also deletes every
+  // place the traveler added by hand, every rename, and every day they had
+  // assigned. That is right for a blank scaffold and wrong for a city somebody
+  // has been living in for four days, and until now it was the only behaviour.
+  //
+  // The safe path already exists one function away: mergeDelta adds what is
+  // new, refuses an id that is already present, and leaves progress alone. All
+  // that was missing is the conversion, because a generated guide is a whole
+  // guide and mergeDelta only speaks delta.
+  //
+  // Pure. The incoming city header is dropped, which is a statement of intent
+  // rather than the protection: mergeDelta clones the CURRENT city and never
+  // reads delta.city, so a header would be ignored even if this passed one
+  // through. Verified, not assumed, after a first version of this comment
+  // claimed the drop was what kept a stay safe. It is not; mergeDelta is.
+  // Dropping it anyway keeps the payload honest about what a top-up is, and
+  // means the guarantee does not quietly depend on a detail of another
+  // function. The header matters here because a re-generation gets it wrong in
+  // exactly this way: Ohrid came back with country NOR and January dates.
+  function guideAsDelta(guide) {
+    var g = guide || {};
+    var out = { schema: 1, delta: true, items: [] };
+    if (Array.isArray(g.sections) && g.sections.length) out.sections = g.sections.slice();
+    if (Array.isArray(g.items)) {
+      out.items = g.items.filter(function (it) {
+        // done and archived are states the traveler reached, never states a
+        // generated guide is entitled to assert about a place it just invented.
+        return it && it.status !== 'done' && it.status !== 'archived';
+      }).map(function (it) {
+        var copy = {};
+        for (var k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) copy[k] = it[k]; }
+        return copy;
+      });
+    }
+    return out;
+  }
+
+  // What the traveler is choosing between, in numbers, before they choose.
+  // `add` is what a merge would bring in; `keep` is what only the merge saves.
+  function fillChoice(current, incoming) {
+    var cur = (current && Array.isArray(current.items)) ? current.items : [];
+    var delta = guideAsDelta(incoming);
+    var curIds = Object.create(null);
+    cur.forEach(function (i) { if (i && i.id) curIds[i.id] = 1; });
+    var incIds = Object.create(null);
+    delta.items.forEach(function (i) { if (i && i.id) incIds[i.id] = 1; });
+    var add = 0;
+    delta.items.forEach(function (i) { if (i && i.id && !curIds[i.id]) add++; });
+    var keep = 0;
+    cur.forEach(function (i) { if (i && i.id && !incIds[i.id]) keep++; });
+    return { add: add, keep: keep, currentItems: cur.length, incomingItems: delta.items.length };
+  }
+
   function mergeDelta(cityData, delta) {
     var errors = [];
     if (!cityData || typeof cityData !== 'object' || Array.isArray(cityData)) {
@@ -2823,6 +2879,40 @@ var CityOps = (function () {
   //   'ok'       - data is a valid city, ready for commitFromForm
   //   'not-json' - no parseable JSON found, direct or fenced
   //   'invalid'  - JSON parsed fine but failed schema validation
+  // ---- Why a link would not load (2026-09-06) ----
+  //
+  // QA note from the PR #4 review, finally earned. Load from link answered
+  // EVERY failure with the same sentence: "That site does not allow apps to
+  // read it; download the file and use a link from this site instead." True
+  // for a CORS refusal, and wrong for a typo, which is the commonest one: a
+  // 404 got told the site blocks apps, so the traveler went looking for a
+  // policy problem instead of a missing character in a URL.
+  //
+  // A status means the server answered, and an answering server is not a
+  // blocking one. No status means the request never completed, which is the
+  // only case the original sentence was ever about.
+  function linkErrorText(err) {
+    var status = err && typeof err.status === 'number' ? err.status : 0;
+    if (status === 404 || status === 410) {
+      return 'There is nothing at that link (' + status + '). The address is probably wrong: ' +
+        'check it character for character, and that it points at the file rather than a page about it.';
+    }
+    if (status === 401 || status === 403) {
+      return 'That link needs a login (' + status + '), so the app cannot read it. Use a link ' +
+        'that works in a private browser window, or download the file and paste it instead.';
+    }
+    if (status >= 500) {
+      return 'That site had an error (' + status + '). Nothing is wrong with the link or the ' +
+        'app: try again in a minute.';
+    }
+    if (status) {
+      return 'That link returned ' + status + ', so nothing could be read from it.';
+    }
+    return 'That request never completed, so the link was never read. Either this device is ' +
+      'offline, or the site does not allow apps to read it from another address. Download the ' +
+      'file and paste it here instead, which always works.';
+  }
+
   function fetchTextToCity(text) {
     var direct = parse(text);
     if (direct.data) return { data: direct.data, errors: [], kind: 'ok' };
@@ -3720,6 +3810,75 @@ var CityOps = (function () {
   // On success `tolerant` says whether anything beyond a clean JSON.parse was
   // needed; the shells preview before committing when it is true, so the
   // path that has always worked keeps behaving exactly as it did.
+  // ---- Is this a city guide, or somebody's chat about one? (2026-09-06) ----
+  //
+  // Ohrid arrived as 20 sections, 12 of them conversation headings
+  // ("Related past chats", "What's open / to work on in this thread",
+  // "About Rob", "Decisions made"). dinner, lunch, coffee and services existed
+  // but held zero items, nothing carried a date, and the country read NOR.
+  // A Claude planning THREAD had been pasted in where a guide belongs.
+  //
+  // It validated. Schema v1 asks for a name, sections and well-formed items,
+  // and a transcript converted to markdown satisfies all three. So it saved,
+  // it synced, and the traveler spent days looking at a Plan tab that was
+  // empty for reasons the app had all the information to explain and never
+  // did. That silence is the bug; the intake being tolerant is not.
+  //
+  // Pure and structural: no wording of any specific guide is hardcoded beyond
+  // the vocabulary a conversation uses about itself.
+  var GUIDE_CORE_SECTIONS = ['dinner', 'breakfast', 'lunch', 'coffee', 'cowork',
+    'activities', 'services', 'practical'];
+  // What a conversation calls its own parts. A city guide has no reason to
+  // name a section after a thread, a chat, or a decision that was made.
+  var TRANSCRIPT_RE = /(this thread|past chat|related chat|previous chat|decisions made|working style|what'?s (open|booked|next)|to work on|conversation|transcript|about (me|rob|the user))/;
+
+  // Returns the reasons this looks like a transcript. Empty means it reads as
+  // a guide. Two or more reasons is the bar for refusing, because any single
+  // one has an innocent explanation: a thin guide, an unusual section name, a
+  // traveler who has not dated anything yet.
+  function transcriptReasons(data) {
+    var out = [];
+    var d = data || {};
+    var sections = Array.isArray(d.sections) ? d.sections : [];
+    var items = Array.isArray(d.items) ? d.items : [];
+    if (!sections.length || !items.length) return out;
+
+    var chatty = sections.filter(function (sec) {
+      var t = (String(sec && sec.id || '') + ' ' + String(sec && sec.label || '')).toLowerCase();
+      return TRANSCRIPT_RE.test(t);
+    });
+    if (chatty.length >= 2) {
+      out.push(chatty.length + ' sections are named after parts of a conversation rather than ' +
+        'parts of a city (' + chatty.slice(0, 3).map(function (s) {
+          return '"' + trimStr(s.label || s.id) + '"';
+        }).join(', ') + ')');
+    }
+
+    // Count what sits where. A guide puts its places in the sections the
+    // contract names; a transcript puts its paragraphs everywhere else.
+    var perSection = {};
+    items.forEach(function (it) {
+      if (!it) return;
+      var k = String(it.section || '');
+      perSection[k] = (perSection[k] || 0) + 1;
+    });
+    var emptyCore = GUIDE_CORE_SECTIONS.filter(function (id) {
+      var declared = sections.some(function (sec) { return sec && sec.id === id; });
+      return declared && !perSection[id];
+    });
+    if (emptyCore.length >= 3) {
+      out.push(emptyCore.length + ' of the guide sections are declared but empty (' +
+        emptyCore.slice(0, 4).join(', ') + ')');
+    }
+    var inCore = 0;
+    GUIDE_CORE_SECTIONS.forEach(function (id) { inCore += (perSection[id] || 0); });
+    if (items.length >= 8 && inCore * 2 < items.length) {
+      out.push('most of the content (' + (items.length - inCore) + ' of ' + items.length +
+        ' items) is outside the sections a guide is made of');
+    }
+    return out;
+  }
+
   // Shaped like a whole guide: it names a city and carries sections, and it is
   // not claiming to be a delta. Deliberately structural rather than a full
   // validation, because the point is to recognise what the traveler MEANT so
@@ -3728,6 +3887,59 @@ var CityOps = (function () {
     return !!d && typeof d === 'object' && d.delta !== true &&
       !!d.city && typeof d.city === 'object' &&
       (Array.isArray(d.sections) || Array.isArray(d.items));
+  }
+
+  // ---- Did the whole paste arrive? (2026-09-06) ----
+  //
+  // Rob pasted a 32KB guide, then a 16KB one, then a 3.9KB one, and each time
+  // got "no complete block in it would parse". The app then offered to CONVERT
+  // the text, which would have built a guide out of whatever fraction had
+  // arrived. Two of those pastes were cut at different points, and the file
+  // was valid every time: the preview pane he was copying from renders a
+  // bounded number of lines.
+  //
+  // The app could see this. A truncated object leaves its braces open, and
+  // that is arithmetic, not a guess. Saying "this is incomplete" costs one
+  // scan and turns an unexplainable failure into an instruction.
+  //
+  // Walks the text once, tracking string state so a brace inside a note is not
+  // counted as structure. Returns null when the text is balanced.
+  function truncationDetail(raw) {
+    var text = String(raw === null || raw === undefined ? '' : raw);
+    var depth = 0, inStr = false, esc = false, sawOpen = false, under = false;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (inStr) {
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '{' || ch === '[') { depth++; sawOpen = true; }
+      else if (ch === '}' || ch === ']') { depth--; if (depth < 0) under = true; }
+    }
+    // Three ways a paste can be a fragment, and they need different sentences:
+    // it stops early (brackets left open), it starts late (more closers than
+    // openers, which is what a scrolled selection produces), or it ends inside
+    // a string. Counting how many places arrived was tried and removed: the
+    // same scan cannot tell a section from an item without parsing, and a
+    // confident wrong number is worse than no number.
+    if (!sawOpen && !under) return null;
+    if (depth === 0 && !inStr && !under) return null;
+    return { depth: depth, inString: inStr, startsLate: under, chars: text.length };
+  }
+
+  // The sentence a truncated paste gets instead of a parse complaint.
+  function truncationMessage(d) {
+    var what = d.startsLate
+      ? 'That paste starts partway into a file: it closes brackets it never opened'
+      : 'That paste stops early: it opens ' + d.depth + ' ' +
+        (d.depth === 1 ? 'bracket that is' : 'brackets that are') + ' never closed';
+    return what + (d.inString ? ', and it ends in the middle of a line of text' : '') +
+      '. Nothing was applied, because a fragment would replace a whole guide. Copy the file ' +
+      'again and check you have all of it, first character to last: a preview pane often ' +
+      'renders only the first screenful, so open the file itself and select all of it there.';
   }
 
   function intakeRead(text, opts) {
@@ -3745,6 +3957,20 @@ var CityOps = (function () {
     if (s) {
       var chk = checkPayload(s.data, mode, opts);
       if (chk.ok) {
+        // Valid is not the same as right. A whole guide that is really a chat
+        // transcript passes every schema check and then wastes days, so the
+        // one thing the intake refuses on shape rather than grammar is this.
+        // Only for `city`: a delta cannot replace a guide, so a strange delta
+        // costs a merge that mergeDelta will not honour anyway.
+        var chatty = (mode === 'city') ? transcriptReasons(s.data) : [];
+        if (chatty.length >= 2) {
+          return { ok: false, data: null, route: s.route, repairs: s.repairs, tolerant: true,
+            found: 'json', errors: chatty, convertible: false, transcript: true,
+            message: 'This looks like a chat about a trip rather than a city guide, so it is ' +
+              'refused before it replaces one:\n- ' + chatty.join('\n- ') +
+              '\nIf it really is a guide, it is missing the parts that make it one. Run ' +
+              'PROMPT.md or Generate with Claude and paste that result instead.' };
+        }
         return { ok: true, data: s.data, route: s.route, repairs: s.repairs,
           tolerant: s.route !== 'json' || s.repairs.length > 0,
           found: 'json', errors: [], stats: null,
@@ -3836,6 +4062,16 @@ var CityOps = (function () {
     }
 
     if (looksJson(raw)) {
+      // Incomplete is a different failure from malformed, and it is the one
+      // with an instruction attached. Checked FIRST, and convertible is false:
+      // converting a fragment would quietly build a guide from the part that
+      // happened to arrive, which is worse than refusing.
+      var cut = truncationDetail(raw);
+      if (cut) {
+        return { ok: false, data: null, route: null, repairs: [], tolerant: false,
+          found: 'json', errors: [], convertible: false, truncated: true,
+          message: truncationMessage(cut) };
+      }
       return { ok: false, data: null, route: null, repairs: [], tolerant: false,
         found: 'json', errors: structuredErrors || [], convertible: mode !== 'raw',
         message: 'This looks like JSON but no complete block in it would parse, ' +
@@ -7905,6 +8141,47 @@ var CityOps = (function () {
     return out;
   }
 
+  // ---- What a replace would cost, said before it happens (2026-09-06) ----
+  //
+  // Rob copied the schema EXAMPLE out of PROMPT.md instead of the prompt, and
+  // that example is a real one-item Batumi guide whose dates derive the id of
+  // his real Batumi. The app said "Batumi: 1 place across 1 section. Press
+  // Confirm to replace this city with it." He confirmed, and 58 places became
+  // one. Every number needed to stop him was already computed: diffSummary has
+  // always known how many items would be removed, it just ran AFTER the write.
+  //
+  // Pure. Returns null when nothing meaningful is lost, so a normal refresh of
+  // a guide (58 places in, 60 out) says nothing extra.
+  function replaceLoss(current, incoming) {
+    var cur = (current && Array.isArray(current.items)) ? current.items : [];
+    var inc = (incoming && Array.isArray(incoming.items)) ? incoming.items : [];
+    if (!cur.length) return null;                 // nothing there to lose
+    var incIds = {};
+    inc.forEach(function (i) { if (i && i.id) incIds[i.id] = 1; });
+    var removed = 0;
+    cur.forEach(function (i) { if (i && i.id && !incIds[i.id]) removed++; });
+    if (!removed) return null;
+    // Severe is what earns an extra press: losing most of a city, or losing a
+    // lot of it outright. A guide that drops a couple of stale picks is a
+    // normal refresh and must not start nagging.
+    var severe = removed >= 5 && (inc.length * 2 < cur.length || removed >= 20);
+    return {
+      removed: removed, currentItems: cur.length, incomingItems: inc.length,
+      currentSections: (current.sections || []).length,
+      incomingSections: (incoming.sections || []).length,
+      severe: severe
+    };
+  }
+
+  // The sentence, in the traveler's terms: what is here, what would be here,
+  // and the number that matters between them.
+  function replaceLossText(name, loss) {
+    return (name ? name + ' has ' : 'This city has ') + loss.currentItems + ' ' +
+      (loss.currentItems === 1 ? 'place' : 'places') + ' right now. Replacing it leaves ' +
+      loss.incomingItems + ', and ' + loss.removed + ' ' +
+      (loss.removed === 1 ? 'place is' : 'places are') + ' removed for good.';
+  }
+
   function diffSummary(oldData, newData) {
     var oldIds = {};
     oldData.items.forEach(function (i) { oldIds[i.id] = 1; });
@@ -8254,10 +8531,16 @@ var CityOps = (function () {
           return;
         }
         dropConvertRow();
-        if (read.tolerant) {
+        // A replace that destroys a city needs a second press whether or not
+        // the paste needed repairing. Tolerance is about the BYTES; this is
+        // about the city, and the city is the part nobody gets back.
+        var loss = replaceLoss(effectiveData(ctx.base, ctx.store.load()), read.data);
+        if (read.tolerant || (loss && loss.severe)) {
           pending = read.data;
           apply.textContent = 'Confirm';
-          msg.textContent = read.message + ' Press Confirm to replace this city with it.';
+          msg.textContent = read.message +
+            (loss ? ' ' + replaceLossText(ctx.base && ctx.base.city && ctx.base.city.name, loss) : '') +
+            ' Press Confirm to replace this city with it.';
           return;
         }
         data = read.data;
@@ -8612,7 +8895,7 @@ var CityOps = (function () {
   return {
     STATUSES: STATUSES, slug: slug, cityId: cityId, dayLabel: dayLabel,
     validate: validate, parse: parse, init: init, boot: boot,
-    mergeDelta: mergeDelta,
+    mergeDelta: mergeDelta, guideAsDelta: guideAsDelta, fillChoice: fillChoice,
     appStore: {
       normalize: normalizeAppStore, add: appAddCity,
       remove: appRemoveCity, keepBothName: keepBothName,
@@ -8643,10 +8926,13 @@ var CityOps = (function () {
     },
     extractJsonBlock: extractJsonBlock, RETRY_INSTRUCTION: RETRY_INSTRUCTION,
     isJsonSyntaxError: isJsonSyntaxError, fetchTextToCity: fetchTextToCity,
+    linkErrorText: linkErrorText,
     // The ONE door every paste box in the product goes through. Tolerance
     // lives here and only here: what comes out still faces validate(),
     // validateItem() and mergeDelta() exactly as a hand-typed payload does.
+    transcriptReasons: transcriptReasons,
     intakeKit: {
+      truncationDetail: truncationDetail,
       read: intakeRead, structured: readStructured, repair: repairCandidate,
       markdownToCity: markdownToCity, markdownToDelta: markdownToDelta,
       conversionPrompt: conversionPrompt, NEXT_STEP: INTAKE_NEXT_STEP,
@@ -8753,7 +9039,7 @@ var CityOps = (function () {
     emptyState: emptyState, makeStore: makeStore, setStatus: setStatus,
     effectiveStatus: effectiveStatus, effectiveData: effectiveData, viewModel: viewModel,
     TRANSITIONS: TRANSITIONS, fmtRange: fmtRange, buildExport: buildExport,
-    diffSummary: diffSummary, shareModel: shareModel,
+    diffSummary: diffSummary, replaceLoss: replaceLoss, replaceLossText: replaceLossText, shareModel: shareModel,
     effectiveDay: effectiveDay, setDay: setDay, stayDates: stayDates,
     normalizeState: normalizeState, effectiveDates: effectiveDates,
     setStayDates: setStayDates, toggleSection: toggleSection,

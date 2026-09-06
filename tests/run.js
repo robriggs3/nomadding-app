@@ -1354,6 +1354,49 @@ test('mergeDelta applied twice is a no-op: everything is already there', () => {
   assert.deepEqual(second.data, first.data);
 });
 
+test('a replace says what it would destroy before it destroys it', () => {
+  // 2026-09-06: Rob copied the schema EXAMPLE out of PROMPT.md instead of the
+  // prompt. That example is a real one-item Batumi guide whose dates derive
+  // the id of his real Batumi. The app said "Batumi: 1 place across 1 section.
+  // Press Confirm to replace this city with it", he confirmed, and 58 places
+  // became one. Every number needed to stop him was already computed;
+  // diffSummary just ran after the write instead of before it.
+  const city = (n, prefix) => ({
+    schema: 1, city: { name: 'Batumi', dates: { from: '2026-08-08', to: '2026-08-15' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: Array.from({ length: n }, (_, i) => ({
+      id: (prefix || 'i') + i, section: 'dinner', status: 'plan', name: 'P' + i,
+      links: [], place_id: null, verified: null }))
+  });
+
+  const loss = C.replaceLoss(city(58), city(1, 'example'));
+  assert.ok(loss, 'the Batumi clobber produced no warning at all');
+  assert.equal(loss.removed, 58);
+  assert.equal(loss.currentItems, 58);
+  assert.equal(loss.incomingItems, 1);
+  assert.equal(loss.severe, true, 'losing a whole city was not judged severe');
+  const text = C.replaceLossText('Batumi', loss);
+  // The three numbers a person needs, in a sentence rather than a schema.
+  assert.ok(/Batumi has 58 places/.test(text));
+  assert.ok(/leaves 1/.test(text));
+  assert.ok(/58 places are removed for good/.test(text));
+
+  // And the other half, which is what keeps this from becoming noise: a normal
+  // refresh that drops a few stale picks must say nothing extra.
+  const refresh = C.replaceLoss(city(58), city(60));
+  assert.equal(refresh, null, 'a clean refresh triggered a loss warning');
+  const smallDrop = city(58);
+  const nearlySame = city(58);
+  nearlySame.items = nearlySame.items.slice(3);   // three picks retired
+  const sd = C.replaceLoss(smallDrop, nearlySame);
+  assert.ok(sd && sd.removed === 3, 'a three item drop was not counted');
+  assert.equal(sd.severe, false, 'retiring three picks demanded an extra press');
+
+  // Nothing to lose, nothing to say.
+  assert.equal(C.replaceLoss(city(0), city(20)), null);
+  assert.equal(C.replaceLoss(city(58), city(58)), null, 're-pasting the same guide warned');
+});
+
 test('mergeDelta ignores an existing section id rather than overwriting its label', () => {
   const d = { schema: 1, delta: true, sections: [{ id: 'dinner', label: 'Renamed by the AI' }] };
   const r = C.mergeDelta(GOOD, d);
@@ -2393,6 +2436,74 @@ test('dayMoveOptions covers the whole stay and marks the day the item is on', ()
   // Every other date stays a live target.
   assert.equal(m.options.filter(o => !o.current).length, 7);
 });
+test('regenerating a lived-in city can add without emptying it', () => {
+  // The approved B1 follow-on. Generate for an existing city REPLACED it:
+  // commit() clears dataOverride so the fresh data wins outright, taking every
+  // hand-added place, rename and day assignment with it. Right for a blank
+  // scaffold, wrong for a city somebody is four days into.
+  const lived = {
+    schema: 1,
+    city: { name: 'Ohrid', country: 'MK', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [
+      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'done', name: 'Kaneo Letna Bavcha',
+        links: [], place_id: null, verified: null },
+      { id: 'my-own-find', section: 'dinner', status: 'plan', name: 'Place I found walking',
+        links: [], place_id: null, verified: null }
+    ]
+  };
+  // A regeneration: overlaps one pick, brings two new, and gets the header
+  // wrong in exactly the way Ohrid's did.
+  const regen = {
+    schema: 1,
+    city: { name: 'Ohrid', country: 'NOR', dates: { from: '2026-01-01', to: '2026-01-08' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }, { id: 'coffee', label: 'Coffee', icon: 'x' }],
+    items: [
+      { id: 'kaneo-letna-bavcha', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha',
+        links: [], place_id: null, verified: null },
+      { id: 'antico', section: 'dinner', status: 'plan', name: 'Antico', links: [], place_id: null, verified: null },
+      { id: 'a-cafe', section: 'coffee', status: 'plan', name: 'A cafe', links: [], place_id: null, verified: null }
+    ]
+  };
+
+  // The numbers the traveler is shown before choosing.
+  const choice = C.fillChoice(lived, regen);
+  assert.equal(choice.add, 2, 'wrong count of new places');
+  assert.equal(choice.keep, 1, 'the hand-added place was not counted as at risk');
+
+  const res = C.mergeDelta(lived, C.guideAsDelta(regen));
+  assert.deepEqual(res.errors, [], 'a generated guide could not be merged as a top-up');
+  assert.equal(res.summary.added, 2);
+  assert.equal(res.summary.skipped, 1, 'the overlapping pick was re-added rather than skipped');
+
+  // The whole point: what the traveler owns survives.
+  assert.ok(res.data.items.some(function (i) { return i.id === 'my-own-find'; }),
+    'the hand-added place was lost, which is the bug this fixes');
+  assert.equal(res.data.items.filter(function (i) { return i.id === 'kaneo-letna-bavcha'; })[0].status,
+    'done', 'progress on an existing pick was overwritten');
+
+  // The header is NOT taken from the regeneration. Ohrid came back with country
+  // NOR and January dates; a top-up must never rewrite a stay in progress.
+  assert.equal(res.data.city.country, 'MK', 'a top-up rewrote the country');
+  assert.equal(res.data.city.dates.from, '2026-09-05', 'a top-up rewrote the stay dates');
+  // And pin the mechanism that actually provides that, which is mergeDelta
+  // cloning the current city rather than guideAsDelta dropping the header. An
+  // earlier comment credited the wrong one; this fails if mergeDelta ever
+  // starts honouring a header on a delta.
+  const withHeader = C.guideAsDelta(regen);
+  withHeader.city = regen.city;
+  assert.equal(C.mergeDelta(lived, withHeader).data.city.country, 'MK',
+    'mergeDelta started taking the city header from a delta');
+  // New sections still arrive, or the new coffee pick would have nowhere to go.
+  assert.ok(res.data.sections.some(function (s) { return s.id === 'coffee'; }));
+
+  // guideAsDelta never lets a generated guide assert progress it cannot know.
+  const withDone = JSON.parse(JSON.stringify(regen));
+  withDone.items[1].status = 'done';
+  assert.equal(C.guideAsDelta(withDone).items.filter(function (i) { return i.id === 'antico'; }).length, 0,
+    'a generated guide was allowed to declare a place already done');
+});
+
 test('dayMoveOptions has no current day for an item with no day assigned', () => {
   const st = C.emptyState();
   const sisters = GOOD.items.find(i => i.id === 'sisters'); // backup, no day
@@ -6227,6 +6338,97 @@ test('the Enrich modal offers one chooser and one row of buttons', () => {
   assert.ok(/interests' && profileEmpty/.test(modal), 'the profile gate moved off the interests pass');
 });
 
+// ---- refusing a chat transcript that validates as a guide (2026-09-06) ----
+
+// The shape Rob's Ohrid actually arrived in: a Claude planning thread whose
+// markdown headings became sections. It satisfied schema v1 in every respect,
+// so it saved and synced, and the traveler then spent two days looking at an
+// empty Eat and Drink tab.
+const TRANSCRIPT_CITY = {
+  schema: 1,
+  city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+  sections: [
+    { id: 'dinner', label: 'Dinner', icon: 'x' },
+    { id: 'lunch', label: 'Lunch', icon: 'x' },
+    { id: 'coffee', label: 'Coffee', icon: 'x' },
+    { id: 'services', label: 'Services', icon: 'x' },
+    { id: 'practical', label: 'Practical', icon: 'x' },
+    { id: 'about-rob', label: 'About Rob', icon: 'x' },
+    { id: 'rob-s-working-style', label: "Rob's working style", icon: 'x' },
+    { id: 'related-past-chats', label: 'Related past chats', icon: 'x' },
+    { id: 'what-s-open-to-work-on-in-this-thread', label: "What's open / to work on in this thread", icon: 'x' },
+    { id: 'decisions-made', label: 'Decisions made', icon: 'x' }
+  ],
+  items: []
+};
+['about-rob', 'rob-s-working-style', 'related-past-chats',
+ 'what-s-open-to-work-on-in-this-thread', 'decisions-made'].forEach(function (sec, si) {
+  for (let i = 0; i < 3; i++) {
+    TRANSCRIPT_CITY.items.push({ id: sec + '-' + i, section: sec, status: 'plan',
+      name: 'Paragraph ' + si + '.' + i, links: [], place_id: null, verified: null });
+  }
+});
+TRANSCRIPT_CITY.items.push({ id: 'one-real-note', section: 'practical', status: 'plan',
+  name: 'Bolt works here', links: [], place_id: null, verified: null });
+
+test('a chat transcript is refused even though it satisfies the schema', () => {
+  // It really does validate: that is the whole problem.
+  assert.deepEqual(C.validate(TRANSCRIPT_CITY), [],
+    'the fixture must be schema-valid, or this test proves nothing');
+  const r = C.intakeKit.read(JSON.stringify(TRANSCRIPT_CITY), { mode: 'city' });
+  assert.equal(r.ok, false, 'a chat transcript was accepted as a city guide');
+  assert.equal(r.transcript, true);
+  assert.ok(/chat about a trip/.test(r.message));
+  // It says WHY, in the traveler's terms, not in schema grammar.
+  assert.ok(r.errors.length >= 2, 'refused without giving its reasons');
+  assert.ok(/conversation/.test(r.message), 'never names the conversation sections');
+  assert.ok(/declared but empty|outside the sections/.test(r.message));
+  // Never a dead end.
+  assert.ok(/PROMPT\.md|Generate with Claude/.test(r.message));
+});
+
+test('a thin but real guide is not mistaken for a transcript', () => {
+  // The false positive that would matter: a small guide, early in a trip,
+  // with only a couple of places in it. One signal is not enough to refuse.
+  const thin = {
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [
+      { id: 'dinner', label: 'Dinner', icon: 'x' },
+      { id: 'coffee', label: 'Coffee', icon: 'x' },
+      { id: 'practical', label: 'Practical', icon: 'x' }
+    ],
+    items: [
+      { id: 'a', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha', links: [], place_id: null, verified: null },
+      { id: 'b', section: 'coffee', status: 'plan', name: 'Lakefront cafe', links: [], place_id: null, verified: null },
+      { id: 'c', section: 'practical', status: 'plan', name: 'Cash and cards', links: [], place_id: null, verified: null }
+    ]
+  };
+  assert.deepEqual(C.transcriptReasons(thin), [], 'a thin real guide tripped the guard');
+  assert.equal(C.intakeKit.read(JSON.stringify(thin), { mode: 'city' }).ok, true);
+
+  // And one signal alone never refuses: a guide that happens to carry a
+  // "Decisions made" section is odd, not a transcript.
+  const oneSignal = JSON.parse(JSON.stringify(thin));
+  oneSignal.sections.push({ id: 'decisions-made', label: 'Decisions made', icon: 'x' });
+  oneSignal.items.push({ id: 'd', section: 'decisions-made', status: 'plan', name: 'Booked the boat', links: [], place_id: null, verified: null });
+  assert.ok(C.transcriptReasons(oneSignal).length < 2, 'one odd section is enough to refuse');
+  assert.equal(C.intakeKit.read(JSON.stringify(oneSignal), { mode: 'city' }).ok, true);
+});
+
+test('the transcript guard only guards the box that replaces a city', () => {
+  // A delta cannot replace a guide, and mergeDelta refuses what it does not
+  // understand anyway, so a strange top-up costs nothing and is left alone.
+  const asDelta = JSON.parse(JSON.stringify(TRANSCRIPT_CITY));
+  asDelta.delta = true;
+  const existing = {
+    schema: 1, city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }], items: []
+  };
+  const r = C.intakeKit.read(JSON.stringify(asDelta), { mode: 'delta', existing: existing });
+  assert.notEqual(r.transcript, true, 'the guard fired on a delta');
+});
+
 test('a near-miss guide in the top-up box reports the guide errors, not the delta ones', () => {
   // Rob, 2026-09-06, second time: pasted a generated guide into Enrich and got
   // "delta must be true" again. The wrong-box detection was there and did not
@@ -6253,6 +6455,63 @@ test('a near-miss guide in the top-up box reports the guide errors, not the delt
   assert.ok(r.errors.length >= 2, 'the errors array is empty on a near-miss guide');
   // And never the delta grammar, which was only ever true by accident.
   assert.equal(r.message.indexOf('delta must be true'), -1);
+});
+
+test('an incomplete paste is named as incomplete, not graded as bad JSON', () => {
+  // 2026-09-06: Rob pasted a 32KB guide, then 16KB, then 3.9KB, and each time
+  // got "no complete block in it would parse" plus an offer to CONVERT the
+  // text. Every file was valid; the preview pane he copied from renders a
+  // bounded number of lines. Converting a fragment would have built a guide
+  // from whatever arrived, which is how you lose a city quietly.
+  const whole = JSON.stringify({
+    schema: 1,
+    city: { name: 'Ohrid', dates: { from: '2026-09-05', to: '2026-09-12' } },
+    sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' }],
+    items: [
+      { id: 'a', section: 'dinner', status: 'plan', name: 'Kaneo Letna Bavcha',
+        note: 'Braces { and } inside a note must not be counted as structure.',
+        links: [], place_id: null, verified: null },
+      { id: 'b', section: 'dinner', status: 'plan', name: 'Antico', links: [], place_id: null, verified: null }
+    ]
+  }, null, 2);
+
+  // The whole thing still works. This is the assertion that keeps the guard
+  // from becoming a wall.
+  assert.equal(C.intakeKit.read(whole, { mode: 'city' }).ok, true, 'the guard refused a complete paste');
+  assert.equal(C.intakeKit.truncationDetail(whole), null);
+
+  // Stops early: the shape of a preview that rendered the first screenful.
+  const head = C.intakeKit.read(whole.slice(0, Math.floor(whole.length * 0.6)), { mode: 'city' });
+  assert.equal(head.truncated, true, 'a half paste was not recognised as incomplete');
+  assert.ok(/stops early/.test(head.message));
+  // The important half: it must NOT offer to convert a fragment.
+  assert.equal(head.convertible, false, 'a fragment was offered to the converter');
+  assert.equal(head.message.indexOf('no complete block'), -1, 'still grading it as bad JSON');
+  // And it says what to do about it.
+  assert.ok(/preview pane|select all/.test(head.message));
+
+  // Starts late: what a scrolled selection produces, which is the other shape
+  // Rob actually hit. Cut on a line boundary, the way a preview pane does,
+  // rather than mid-string, so this exercises the closers-without-openers path
+  // and not the ends-inside-a-string one.
+  const lines = whole.split('\n');
+  const tailText = lines.slice(Math.floor(lines.length * 0.7)).join('\n');
+  const tail = C.intakeKit.read(tailText, { mode: 'city' });
+  assert.equal(tail.truncated, true, 'a tail-only paste was not recognised');
+  assert.equal(C.intakeKit.truncationDetail(tailText).startsLate, true);
+  assert.ok(/starts partway/.test(tail.message));
+  assert.equal(tail.convertible, false);
+
+  // Ends inside a string: cut mid-note rather than mid-structure.
+  const midString = whole.slice(0, whole.indexOf('must not be counted'));
+  const ms = C.intakeKit.truncationDetail(midString);
+  assert.ok(ms && ms.inString, 'a cut inside a string was not seen');
+
+  // Genuinely malformed but COMPLETE json keeps the old message, because there
+  // the parse complaint is the true one and there is nothing to re-copy.
+  const malformed = '{"schema":1,"city":{"name":"Ohrid"},"items":[{"id":,}]}';
+  const bad = C.intakeKit.read(malformed, { mode: 'city' });
+  assert.notEqual(bad.truncated, true, 'balanced-but-broken JSON was called truncated');
 });
 
 test('a whole guide pasted into the top-up box is named, not graded', () => {
@@ -6299,6 +6558,40 @@ test('a whole guide pasted into the top-up box is named, not graded', () => {
   assert.equal(junk.ok, false);
   assert.equal(junk.wrongBox, undefined, 'a broken payload was mistaken for a misrouted one');
   assert.ok(junk.errors.length > 0, 'a broken payload lost its errors');
+});
+
+test('Load from link says which failure it was, not always CORS', () => {
+  // QA note from the PR #4 review. Every failure got the same sentence:
+  // "That site does not allow apps to read it". True for a CORS refusal and
+  // wrong for the commonest case, a typo, where a 404 sent the traveler
+  // looking for a policy problem instead of a missing character in a URL.
+  const withStatus = (n) => { const e = new Error('link ' + n); e.status = n; return e; };
+
+  // A server that ANSWERED is not a server that blocked us.
+  assert.ok(/nothing at that link \(404\)/.test(C.linkErrorText(withStatus(404))));
+  assert.ok(/address is probably wrong/.test(C.linkErrorText(withStatus(404))));
+  assert.ok(/needs a login \(403\)/.test(C.linkErrorText(withStatus(403))));
+  assert.ok(/needs a login \(401\)/.test(C.linkErrorText(withStatus(401))));
+  assert.ok(/site had an error \(503\)/.test(C.linkErrorText(withStatus(503))));
+  assert.ok(/try again/i.test(C.linkErrorText(withStatus(503))), 'a 5xx does not say it is temporary');
+  assert.ok(/returned 418/.test(C.linkErrorText(withStatus(418))), 'an unusual status loses its number');
+
+  // None of the answered cases may blame the site's policy.
+  [404, 403, 500, 418].forEach(function (n) {
+    assert.equal(/does not allow apps/.test(C.linkErrorText(withStatus(n))), false,
+      n + ' was still blamed on CORS');
+  });
+
+  // No status means the request never completed, which IS the case the old
+  // sentence was about, and it keeps it plus the offline reading.
+  const noStatus = C.linkErrorText(new Error('Failed to fetch'));
+  assert.ok(/never completed/.test(noStatus));
+  assert.ok(/offline/.test(noStatus), 'the offline reading is missing');
+  assert.ok(/does not allow apps/.test(noStatus), 'the CORS reading was lost');
+  // Never a dead end, same rule as every other refusal in this app.
+  assert.ok(/paste it here instead/.test(noStatus));
+  // And it survives being handed nothing at all.
+  assert.ok(C.linkErrorText(null).length > 20);
 });
 
 test('a request that never reached Anthropic does not read as an API error', () => {
@@ -6976,6 +7269,30 @@ test('a published share carries the verdict tier, and the page renders it', () =
   assert.equal(page.indexOf('Auto-updating'), -1, 'the false auto-update line came back');
   assert.equal(page.indexOf('footer-meta'), -1, 'the element it wrote into came back');
   assert.ok(page.indexOf('This page is a snapshot taken when the traveler pressed Publish') !== -1);
+});
+
+test('no em-dash or en-dash character ships anywhere', () => {
+  // House rule, and it had been broken in one file since the trip surface was
+  // imported: src/trip-shell.html carried 127 em-dashes and 11 en-dashes,
+  // identical on main, in CSS comments, code comments and user-visible copy.
+  // Nothing enforced it, so nothing noticed for weeks. This is the enforcement.
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const files = ['src/trip-shell.html', 'src/share-shell.html', 'src/app-shell.html',
+    'src/guide-shell.html', 'src/cityops.js', 'src/cityops.css', 'PROMPT.md', 'README.md',
+    'index.html', 'template.html', 'trip/index.html', 'share/index.html', 'example.html'];
+  const offenders = [];
+  files.forEach(function (rel) {
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    const hits = text.match(/[\u2014\u2013]/g);
+    if (hits) {
+      // Name the first line so the failure is actionable rather than a count.
+      const line = text.slice(0, text.search(/[\u2014\u2013]/)).split('\n').length;
+      offenders.push(rel + ' (' + hits.length + ', first at line ' + line + ')');
+    }
+  });
+  assert.deepEqual(offenders, [], 'em-dash or en-dash characters shipped in: ' + offenders.join(', '));
 });
 
 test('the AI copy says which path can actually search the web', () => {
