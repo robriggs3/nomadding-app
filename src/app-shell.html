@@ -2300,7 +2300,12 @@
   // instead. The proxy call carries a FRESH access token, because a run that
   // takes four minutes is exactly the run whose token was about to expire.
   function aiRequestPlan(apiKey) {
-    var t = aiTransportNow();
+    return aiRequestPlanFor(aiTransportNow(), apiKey);
+  }
+
+  // The plan for a NAMED transport, so a run whose first transport never got an
+  // answer can be retried on the other one without re-asking which is current.
+  function aiRequestPlanFor(t, apiKey) {
     if (t === 'direct') {
       return Promise.resolve({
         transport: t,
@@ -2392,7 +2397,34 @@
     if (!entAllows()) return Promise.reject(new Error(entGateText('ai')));
     var searches = 0;
 
-    return aiRequestPlan(apiKey).then(function (plan) {
+    // ONE BLOCKED HOST IS NO LONGER A DEAD END.
+    //
+    // Only ever after a NETWORK failure, never after a refusal: a refusal with
+    // a status is an answer, and re-running an answer on the other bill would
+    // be spending money to repeat a result we already have. At most one retry,
+    // and only when the other transport can actually carry the run, which
+    // aiProxyKit.fallbackTransport decides from the same context aiTransport
+    // uses.
+    function afterPlan(plan) {
+      if (plan.message) throw new Error(plan.message);
+      return runWithPlan(plan);
+    }
+
+    function retryOnce(e, from) {
+      if (!CityOps.aiProxyKit.isNetworkError(e)) throw e;
+      var next = CityOps.aiProxyKit.fallbackTransport(from, aiTransportCtx());
+      if (!next) throw e;
+      if (onProgress) {
+        onProgress({ kind: 'text', totalChars: 0,
+          note: (e.aiHost || 'that host') + ' did not answer, trying the other route' });
+      }
+      // No second retry: two silent hosts is a blocked network, not a route
+      // problem, and the copy-a-prompt path is the honest answer to that.
+      return aiRequestPlanFor(next, apiKey).then(afterPlan);
+    }
+
+    function runWithPlan(plan) {
+      return Promise.resolve().then(function () {
       // Neither transport is available. The modal that called this already
       // offers the free copy-a-prompt path; this says which one is missing.
       if (plan.message) throw new Error(plan.message);
@@ -2422,6 +2454,16 @@
           signal: signal || undefined,
           headers: plan.headers,
           body: JSON.stringify(body)
+        }).catch(function (e) {
+          // A fetch that never got an answer carries no status and no host, so
+          // the error is told WHERE it was going before it travels any further.
+          // Without this the message downstream blamed api.anthropic.com for a
+          // managed run that never left for Anthropic at all.
+          if (e && CityOps.aiProxyKit.isNetworkError(e)) {
+            e.aiHost = CityOps.aiProxyKit.hostOf(plan.url);
+            e.aiTransport = plan.transport;
+          }
+          throw e;
         }).then(function (resp) {
           if (!resp.ok || !resp.body) {
             return resp.text().catch(function () { return ''; }).then(function (bodyText) {
@@ -2549,6 +2591,12 @@
       }
 
       return runOnce([{ role: 'user', content: prompt }], 0, '');
+      });
+    }
+
+    return aiRequestPlan(apiKey).then(function (plan) {
+      if (plan.message) throw new Error(plan.message);
+      return runWithPlan(plan).catch(function (e) { return retryOnce(e, plan.transport); });
     });
   }
 

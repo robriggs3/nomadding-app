@@ -5653,7 +5653,7 @@ test('a place pass reply that names the wrong id changes nothing, and says so', 
 // the same way the transport is. It defaults to true so every existing test
 // below describes the paying case unchanged; passing false is what exercises
 // the gate, and the point of that test is that it never reaches fetch at all.
-function loadCallClaudeStream(fetchImpl, entitled, plan) {
+function loadCallClaudeStream(fetchImpl, entitled, plan, planFor, ctx) {
   const fs = require('fs');
   const path = require('path');
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -5662,8 +5662,11 @@ function loadCallClaudeStream(fetchImpl, entitled, plan) {
   const end = html.indexOf('\n  }\n', start);
   assert.ok(end !== -1, 'could not find the end of callClaudeStream');
   const src = html.slice(start, end + 4);
+  // aiRequestPlanFor and aiTransportCtx exist for the fallback path only: a run
+  // whose host never answered is retried once on the other transport. Injected
+  // the same way the plan is, so a test can drive that retry.
   const fn = new Function('fetch', 'TextDecoder', 'CLAUDE_MODEL', 'CLAUDE_MAX_TOKENS',
-    'entAllows', 'entGateText', 'aiRequestPlan', 'CityOps',
+    'entAllows', 'entGateText', 'aiRequestPlan', 'aiRequestPlanFor', 'aiTransportCtx', 'CityOps',
     src + '\nreturn callClaudeStream;');
   return fn(fetchImpl, TextDecoder, 'claude-test', 1000,
     function () { return entitled !== false; },
@@ -5683,6 +5686,10 @@ function loadCallClaudeStream(fetchImpl, entitled, plan) {
         }
       });
     },
+    // Default: there is nowhere to fall back to, so a test that does not opt in
+    // sees exactly the old single-transport behaviour.
+    planFor || function () { return Promise.resolve({ message: 'no other route' }); },
+    ctx || function () { return { hasKey: false, tier: '', entitled: true, signedIn: false }; },
     C);
 }
 
@@ -6672,7 +6679,13 @@ test('a request that never reached Anthropic does not read as an API error', () 
    'Load failed',                                      // Safari
    'Network request failed'].forEach(function (m) {
     const out = C.aiProxyKit.errorText(new Error(m));
-    assert.ok(/never reached Anthropic/.test(out), m + ' still reads as an API error');
+    assert.ok(/never reached/.test(out), m + ' still reads as an API error');
+    // REWRITTEN 2026-09-08, not deleted. This used to pin "never reached
+    // Anthropic" for every network failure. That wording was the bug: on the
+    // managed transport the host that failed is our own edge function, and
+    // blaming Anthropic sent the diagnosis the wrong way three times. An error
+    // carrying no host must now name NO host rather than guess one.
+    assert.equal(/anthropic/i.test(out), false, m + ' names a host it cannot know: ' + out);
     assert.ok(/not the problem/.test(out), m + ' does not clear the saved key');
     // Never a dead end: the free path is named in the same breath, as
     // everywhere else in this app.
@@ -6686,6 +6699,126 @@ test('a request that never reached Anthropic does not read as an API error', () 
   // And a throw with nothing on it still says something actionable.
   assert.ok(C.aiProxyKit.errorText(new Error('')).length > 20);
   assert.ok(C.aiProxyKit.errorText(null).length > 20);
+});
+
+// ---------------------------------------------------------------------------
+// Name the host that actually failed (Rob, three times, 2026-09-06 and 09-08)
+// ---------------------------------------------------------------------------
+test('a network failure names the host that did not answer, not a guess', () => {
+  const proxied = new Error('Failed to fetch');
+  proxied.aiHost = 'ggscdbbvqmqiyguiccrf.functions.supabase.co';
+  proxied.aiTransport = 'proxy';
+  const p = C.aiProxyKit.errorText(proxied);
+  assert.ok(/ggscdbbvqmqiyguiccrf\.functions\.supabase\.co/.test(p), p);
+  // The whole defect in one assertion: a managed run that never left the
+  // browser must not be reported as Anthropic being blocked.
+  assert.equal(/anthropic/i.test(p), false, 'a proxy failure still blames Anthropic: ' + p);
+  assert.ok(/OUR server/.test(p), p);
+  // And it has to say what to DO, by name, or it is a diagnosis with no cure.
+  assert.ok(/allowing ggscdbbvqmqiyguiccrf\.functions\.supabase\.co/.test(p), p);
+
+  const direct = new Error('Load failed');
+  direct.aiHost = 'api.anthropic.com';
+  direct.aiTransport = 'direct';
+  const d = C.aiProxyKit.errorText(direct);
+  assert.ok(/api\.anthropic\.com/.test(d), d);
+  assert.ok(/That is Anthropic/.test(d), d);
+
+  // A status is an answer, so it keeps its own wording whatever host it names.
+  const answered = new Error('Claude API returned 429: slow down');
+  answered.aiHost = 'api.anthropic.com';
+  answered.aiTransport = 'direct';
+  assert.ok(/429/.test(C.aiProxyKit.errorText(answered)), 'a real status lost its wording');
+});
+
+test('hostOf reads a host without throwing on anything', () => {
+  assert.equal(C.aiProxyKit.hostOf('https://api.anthropic.com/v1/messages'), 'api.anthropic.com');
+  assert.equal(C.aiProxyKit.hostOf('https://x.functions.supabase.co/ai-proxy?a=1'), 'x.functions.supabase.co');
+  // It runs inside an error handler, so a bad input degrades rather than throws.
+  ['', null, undefined, 'not a url', '/relative'].forEach(function (v) {
+    assert.equal(C.aiProxyKit.hostOf(v), '', String(v));
+  });
+});
+
+test('the fallback transport is offered only where there is somewhere to go', () => {
+  const paid = { entitled: true, signedIn: true, tier: 'managed' };
+  // A blocked Anthropic falls back to our key when the plan allows it.
+  assert.equal(C.aiProxyKit.fallbackTransport('direct', Object.assign({ hasKey: true }, paid)), 'proxy');
+  // A blocked proxy falls back to the traveler's own key when there is one.
+  assert.equal(C.aiProxyKit.fallbackTransport('proxy', Object.assign({ hasKey: true }, paid)), 'direct');
+  // ... and nowhere at all when there is not.
+  assert.equal(C.aiProxyKit.fallbackTransport('proxy', Object.assign({ hasKey: false }, paid)), '');
+  // A free device with its own key has no second route: our key is not a
+  // fallback for somebody who is not paying for it.
+  assert.equal(C.aiProxyKit.fallbackTransport('direct',
+    { hasKey: true, entitled: true, signedIn: true, tier: 'byok' }), '');
+  assert.equal(C.aiProxyKit.fallbackTransport('none', paid), '');
+});
+
+asyncTest('a blocked host is retried once on the other route, and only for a network failure', () => {
+  let calls = [];
+  const call = loadCallClaudeStream(function (url) {
+    calls.push(url);
+    if (url.indexOf('anthropic') !== -1) return Promise.reject(new TypeError('Failed to fetch'));
+    return Promise.resolve({ ok: true, body: sseBody([
+      { type: 'content_block_delta', delta: { type: 'text_delta', text: 'rescued' } }
+    ]) });
+  }, true,
+    function () { return Promise.resolve({ transport: 'direct',
+      url: 'https://api.anthropic.com/v1/messages', headers: {} }); },
+    function () { return Promise.resolve({ transport: 'proxy',
+      url: 'https://p.functions.supabase.co/ai-proxy', headers: {} }); },
+    function () { return { hasKey: true, tier: 'managed', entitled: true, signedIn: true }; });
+  return call('THE PROMPT', 'k', null).then(function (text) {
+    assert.equal(text, 'rescued');
+    assert.equal(calls.length, 2, 'expected exactly one retry, got ' + calls.length);
+    assert.ok(calls[0].indexOf('anthropic') !== -1);
+    assert.ok(calls[1].indexOf('ai-proxy') !== -1);
+  });
+});
+
+asyncTest('a refusal WITH a status is never retried on the other bill', () => {
+  let calls = 0;
+  const call = loadCallClaudeStream(function () {
+    calls++;
+    return Promise.resolve({ ok: false, status: 429,
+      text: function () { return Promise.resolve('{"error":{"message":"slow down"}}'); } });
+  }, true,
+    function () { return Promise.resolve({ transport: 'direct',
+      url: 'https://api.anthropic.com/v1/messages', headers: {} }); },
+    function () { return Promise.resolve({ transport: 'proxy',
+      url: 'https://p.functions.supabase.co/ai-proxy', headers: {} }); },
+    function () { return { hasKey: true, tier: 'managed', entitled: true, signedIn: true }; });
+  return call('THE PROMPT', 'k', null).then(
+    function () { throw new Error('a 429 should not resolve'); },
+    function (e) {
+      // An answer is an answer. Re-running it on our key would spend money to
+      // learn what we already know.
+      assert.equal(calls, 1, 'a status answer was retried: ' + calls + ' calls');
+      assert.ok(/429|slow down/.test(e.message), e.message);
+    });
+});
+
+asyncTest('two silent hosts stop, rather than retrying forever', () => {
+  let calls = 0;
+  const call = loadCallClaudeStream(function () {
+    calls++;
+    return Promise.reject(new TypeError('Failed to fetch'));
+  }, true,
+    function () { return Promise.resolve({ transport: 'direct',
+      url: 'https://api.anthropic.com/v1/messages', headers: {} }); },
+    function () { return Promise.resolve({ transport: 'proxy',
+      url: 'https://p.functions.supabase.co/ai-proxy', headers: {} }); },
+    function () { return { hasKey: true, tier: 'managed', entitled: true, signedIn: true }; });
+  return call('THE PROMPT', 'k', null).then(
+    function () { throw new Error('should not resolve'); },
+    function (e) {
+      assert.equal(calls, 2, 'expected one retry then a stop, got ' + calls);
+      // The error that surfaces is the SECOND host's, annotated, so the message
+      // names the host the traveler was last waiting on.
+      assert.equal(e.aiHost, 'p.functions.supabase.co', 'the surfaced error lost its host');
+      assert.equal(e.aiTransport, 'proxy');
+    });
 });
 
 test('shouldResume only continues a paused turn, and only so many times', () => {
