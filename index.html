@@ -7282,17 +7282,86 @@ var CityOps = (function () {
   // This was a standing watch item on this thread's INBOX from 2026-08-24,
   // after the first sighting self-resolved: "if it recurs, ship a version that
   // surfaces the precise failure cause instead of the generic message."
+  // A fetch that never got an answer. Every browser words it differently, hence
+  // the four spellings; none of them carries a status, because there was none.
+  var AI_NETWORK_RE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+  function aiIsNetworkError(err) {
+    return AI_NETWORK_RE.test((err && err.message) ? String(err.message) : '');
+  }
+
+  // The host a URL points at, for saying which one did not answer. Deliberately
+  // string work rather than `new URL`: this runs in the shells' extracted test
+  // harness as well as the browser, and a bad URL must degrade to '' rather
+  // than throw inside an error handler.
+  function aiHostOf(url) {
+    var m = /^https?:\/\/([^\/?#]+)/i.exec(String(url || ''));
+    return m ? m[1] : '';
+  }
+
+  // NAME THE HOST THAT ACTUALLY FAILED.
+  //
+  // This function used to blame api.anthropic.com for every network-level
+  // failure, whichever transport had made the request. On the managed tier the
+  // host that failed is our own edge function, and a traveler was being told to
+  // check a content blocker against Anthropic and to doubt a saved key that was
+  // never even read. Rob hit that message three times on 2026-09-06 and 09-08,
+  // on two devices, and it sent the diagnosis the wrong way each time.
+  //
+  // err may carry aiHost and aiTransport, attached by the caller that made the
+  // request. Without them the wording stays honest by staying general rather
+  // than guessing a host.
   function aiErrorText(err) {
     var msg = (err && err.message) ? String(err.message) : '';
-    if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
-      return 'That request never reached Anthropic, so it is not an API error and your saved key ' +
-        'is not the problem. Almost always this is a content blocker or privacy extension ' +
-        'blocking api.anthropic.com, a VPN or network that blocks it, or the connection ' +
-        'dropping. The prompt is unaffected: use Copy prompt and run it in your own Claude, ' +
-        'which needs no key and no direct connection.';
+    if (aiIsNetworkError(err)) {
+      var host = (err && err.aiHost) ? String(err.aiHost) : '';
+      var t = (err && err.aiTransport) || '';
+      var who = host
+        ? 'never reached ' + host
+        : 'never reached the server it was sent to';
+      // Say whose server it was ONLY when the caller said which transport made
+      // the request. An unannotated error knows neither, and guessing is the
+      // exact mistake this function is being fixed for.
+      var whose = t === 'proxy'
+        ? 'That is OUR server, so neither your key nor your plan is the problem. '
+        : t === 'direct'
+        ? 'That is Anthropic, so it is not an API error and your saved key is not the problem. '
+        : 'Nothing answered, so this is not an API error and a saved key is not the problem. ';
+      return 'That request ' + who + ', so nothing answered it. ' + whose +
+        'Almost always this is a content blocker or privacy extension, a VPN, or a network ' +
+        'that blocks the host above' + (host ? ', so allowing ' + host + ' fixes it' : '') +
+        '. The prompt is unaffected: use Copy prompt and run it in your own Claude, which ' +
+        'needs no key and no direct connection.';
     }
     if (!msg) return 'That AI run stopped without saying why. Copy the prompt and run it in your own Claude.';
     return 'Claude API error: ' + msg;
+  }
+
+  // WHICH TRANSPORT TO TRY WHEN THE FIRST ONE NEVER ANSWERED.
+  //
+  // Only ever after a NETWORK failure. A refusal with a status is an answer,
+  // and retrying an answer on somebody else's bill would be spending money to
+  // repeat a result we already have.
+  //
+  // ctx is what aiTransport takes. The rules that matter:
+  //   - from `direct`, fall back to `proxy` only if the plan actually allows
+  //     it, which is the same test aiTransport already makes;
+  //   - from `proxy`, fall back to `direct` only if a key exists on this
+  //     device, because there is nothing to send otherwise;
+  //   - never fall back to the transport that just failed, and never twice.
+  // Returns '' when there is nowhere to go, which is a dead end the copy-a-
+  // prompt path already covers.
+  function aiFallbackTransport(current, ctx) {
+    var o = ctx || {};
+    if (current === 'direct') {
+      // Ask the real decision what a keyless device would get. If that is the
+      // proxy, the account is entitled and on a managed tier, and our key can
+      // carry this run.
+      var without = { hasKey: false, tier: o.tier, entitled: o.entitled, signedIn: o.signedIn };
+      return aiTransport(without) === 'proxy' ? 'proxy' : '';
+    }
+    if (current === 'proxy') return o.hasKey ? 'direct' : '';
+    return '';
   }
 
   // What the app says when the proxy refuses. Never an error, never a dead end:
@@ -10193,6 +10262,10 @@ var CityOps = (function () {
       SEARCH_MAX_USES: SEARCH_MAX_USES,
       SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
       searchTools: aiSearchTools, searchNote: aiSearchNote, errorText: aiErrorText,
+      // Told apart so the shells can retry a request that never got an answer,
+      // and name the host that did not answer it.
+      isNetworkError: aiIsNetworkError, hostOf: aiHostOf,
+      fallbackTransport: aiFallbackTransport,
       shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
@@ -17419,17 +17492,86 @@ var CityOps = (function () {
   // This was a standing watch item on this thread's INBOX from 2026-08-24,
   // after the first sighting self-resolved: "if it recurs, ship a version that
   // surfaces the precise failure cause instead of the generic message."
+  // A fetch that never got an answer. Every browser words it differently, hence
+  // the four spellings; none of them carries a status, because there was none.
+  var AI_NETWORK_RE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+  function aiIsNetworkError(err) {
+    return AI_NETWORK_RE.test((err && err.message) ? String(err.message) : '');
+  }
+
+  // The host a URL points at, for saying which one did not answer. Deliberately
+  // string work rather than `new URL`: this runs in the shells' extracted test
+  // harness as well as the browser, and a bad URL must degrade to '' rather
+  // than throw inside an error handler.
+  function aiHostOf(url) {
+    var m = /^https?:\/\/([^\/?#]+)/i.exec(String(url || ''));
+    return m ? m[1] : '';
+  }
+
+  // NAME THE HOST THAT ACTUALLY FAILED.
+  //
+  // This function used to blame api.anthropic.com for every network-level
+  // failure, whichever transport had made the request. On the managed tier the
+  // host that failed is our own edge function, and a traveler was being told to
+  // check a content blocker against Anthropic and to doubt a saved key that was
+  // never even read. Rob hit that message three times on 2026-09-06 and 09-08,
+  // on two devices, and it sent the diagnosis the wrong way each time.
+  //
+  // err may carry aiHost and aiTransport, attached by the caller that made the
+  // request. Without them the wording stays honest by staying general rather
+  // than guessing a host.
   function aiErrorText(err) {
     var msg = (err && err.message) ? String(err.message) : '';
-    if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
-      return 'That request never reached Anthropic, so it is not an API error and your saved key ' +
-        'is not the problem. Almost always this is a content blocker or privacy extension ' +
-        'blocking api.anthropic.com, a VPN or network that blocks it, or the connection ' +
-        'dropping. The prompt is unaffected: use Copy prompt and run it in your own Claude, ' +
-        'which needs no key and no direct connection.';
+    if (aiIsNetworkError(err)) {
+      var host = (err && err.aiHost) ? String(err.aiHost) : '';
+      var t = (err && err.aiTransport) || '';
+      var who = host
+        ? 'never reached ' + host
+        : 'never reached the server it was sent to';
+      // Say whose server it was ONLY when the caller said which transport made
+      // the request. An unannotated error knows neither, and guessing is the
+      // exact mistake this function is being fixed for.
+      var whose = t === 'proxy'
+        ? 'That is OUR server, so neither your key nor your plan is the problem. '
+        : t === 'direct'
+        ? 'That is Anthropic, so it is not an API error and your saved key is not the problem. '
+        : 'Nothing answered, so this is not an API error and a saved key is not the problem. ';
+      return 'That request ' + who + ', so nothing answered it. ' + whose +
+        'Almost always this is a content blocker or privacy extension, a VPN, or a network ' +
+        'that blocks the host above' + (host ? ', so allowing ' + host + ' fixes it' : '') +
+        '. The prompt is unaffected: use Copy prompt and run it in your own Claude, which ' +
+        'needs no key and no direct connection.';
     }
     if (!msg) return 'That AI run stopped without saying why. Copy the prompt and run it in your own Claude.';
     return 'Claude API error: ' + msg;
+  }
+
+  // WHICH TRANSPORT TO TRY WHEN THE FIRST ONE NEVER ANSWERED.
+  //
+  // Only ever after a NETWORK failure. A refusal with a status is an answer,
+  // and retrying an answer on somebody else's bill would be spending money to
+  // repeat a result we already have.
+  //
+  // ctx is what aiTransport takes. The rules that matter:
+  //   - from `direct`, fall back to `proxy` only if the plan actually allows
+  //     it, which is the same test aiTransport already makes;
+  //   - from `proxy`, fall back to `direct` only if a key exists on this
+  //     device, because there is nothing to send otherwise;
+  //   - never fall back to the transport that just failed, and never twice.
+  // Returns '' when there is nowhere to go, which is a dead end the copy-a-
+  // prompt path already covers.
+  function aiFallbackTransport(current, ctx) {
+    var o = ctx || {};
+    if (current === 'direct') {
+      // Ask the real decision what a keyless device would get. If that is the
+      // proxy, the account is entitled and on a managed tier, and our key can
+      // carry this run.
+      var without = { hasKey: false, tier: o.tier, entitled: o.entitled, signedIn: o.signedIn };
+      return aiTransport(without) === 'proxy' ? 'proxy' : '';
+    }
+    if (current === 'proxy') return o.hasKey ? 'direct' : '';
+    return '';
   }
 
   // What the app says when the proxy refuses. Never an error, never a dead end:
@@ -20330,6 +20472,10 @@ var CityOps = (function () {
       SEARCH_MAX_USES: SEARCH_MAX_USES,
       SEARCH_MAX_CONTINUATIONS: SEARCH_MAX_CONTINUATIONS,
       searchTools: aiSearchTools, searchNote: aiSearchNote, errorText: aiErrorText,
+      // Told apart so the shells can retry a request that never got an answer,
+      // and name the host that did not answer it.
+      isNetworkError: aiIsNetworkError, hostOf: aiHostOf,
+      fallbackTransport: aiFallbackTransport,
       shouldResume: aiShouldResume,
       // Localhost only, checked inside the function, exactly as entitlementKit
       // does it and for exactly the same reason.
@@ -23379,7 +23525,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // instead. The proxy call carries a FRESH access token, because a run that
   // takes four minutes is exactly the run whose token was about to expire.
   function aiRequestPlan(apiKey) {
-    var t = aiTransportNow();
+    return aiRequestPlanFor(aiTransportNow(), apiKey);
+  }
+
+  // The plan for a NAMED transport, so a run whose first transport never got an
+  // answer can be retried on the other one without re-asking which is current.
+  function aiRequestPlanFor(t, apiKey) {
     if (t === 'direct') {
       return Promise.resolve({
         transport: t,
@@ -23471,7 +23622,34 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     if (!entAllows()) return Promise.reject(new Error(entGateText('ai')));
     var searches = 0;
 
-    return aiRequestPlan(apiKey).then(function (plan) {
+    // ONE BLOCKED HOST IS NO LONGER A DEAD END.
+    //
+    // Only ever after a NETWORK failure, never after a refusal: a refusal with
+    // a status is an answer, and re-running an answer on the other bill would
+    // be spending money to repeat a result we already have. At most one retry,
+    // and only when the other transport can actually carry the run, which
+    // aiProxyKit.fallbackTransport decides from the same context aiTransport
+    // uses.
+    function afterPlan(plan) {
+      if (plan.message) throw new Error(plan.message);
+      return runWithPlan(plan);
+    }
+
+    function retryOnce(e, from) {
+      if (!CityOps.aiProxyKit.isNetworkError(e)) throw e;
+      var next = CityOps.aiProxyKit.fallbackTransport(from, aiTransportCtx());
+      if (!next) throw e;
+      if (onProgress) {
+        onProgress({ kind: 'text', totalChars: 0,
+          note: (e.aiHost || 'that host') + ' did not answer, trying the other route' });
+      }
+      // No second retry: two silent hosts is a blocked network, not a route
+      // problem, and the copy-a-prompt path is the honest answer to that.
+      return aiRequestPlanFor(next, apiKey).then(afterPlan);
+    }
+
+    function runWithPlan(plan) {
+      return Promise.resolve().then(function () {
       // Neither transport is available. The modal that called this already
       // offers the free copy-a-prompt path; this says which one is missing.
       if (plan.message) throw new Error(plan.message);
@@ -23501,6 +23679,16 @@ only judges it. `ratings` may be omitted when you could not verify the place;
           signal: signal || undefined,
           headers: plan.headers,
           body: JSON.stringify(body)
+        }).catch(function (e) {
+          // A fetch that never got an answer carries no status and no host, so
+          // the error is told WHERE it was going before it travels any further.
+          // Without this the message downstream blamed api.anthropic.com for a
+          // managed run that never left for Anthropic at all.
+          if (e && CityOps.aiProxyKit.isNetworkError(e)) {
+            e.aiHost = CityOps.aiProxyKit.hostOf(plan.url);
+            e.aiTransport = plan.transport;
+          }
+          throw e;
         }).then(function (resp) {
           if (!resp.ok || !resp.body) {
             return resp.text().catch(function () { return ''; }).then(function (bodyText) {
@@ -23628,6 +23816,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       }
 
       return runOnce([{ role: 'user', content: prompt }], 0, '');
+      });
+    }
+
+    return aiRequestPlan(apiKey).then(function (plan) {
+      if (plan.message) throw new Error(plan.message);
+      return runWithPlan(plan).catch(function (e) { return retryOnce(e, plan.transport); });
     });
   }
 
