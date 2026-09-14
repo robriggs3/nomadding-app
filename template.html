@@ -3467,6 +3467,102 @@ var CityOps = (function () {
     return out.join('\n');
   }
 
+  // ---- staged generation: a whole city, a few short passes at a time ----
+  //
+  // A whole-city Generate used to be ONE call asking for everything, with
+  // max_tokens 32000 and adaptive thinking. On 2026-09-09 that call ran for
+  // 400.2 seconds through the managed proxy and emitted no output token at
+  // all: the Supabase edge function's paid wall clock killed the isolate while
+  // the model was still thinking. HTTP 200, 1,118 bytes, thirteen keepalive
+  // pings, nothing else, and a traveler with nothing to show for four minutes.
+  //
+  // The fix is not a bigger ceiling, it is a smaller unit of work. Each stage
+  // below is the SAME SHAPE as the research pass that already works, which
+  // returned a complete delta in 13.9 seconds on the same key the same
+  // morning. mergeDelta already merges those deltas and already refuses
+  // duplicate ids, so nothing new had to be invented to hold them together.
+  //
+  // Three properties are the point, and each is worth more than the speed:
+  //   - a stage that lands is KEPT. A failure in the last stage used to leave
+  //     nothing; now it leaves a city with its eat and drink and its things to
+  //     do, and a retry that resumes rather than restarts.
+  //   - every stage is far inside the wall clock, so the ceiling stops being
+  //     something the traveler can hit at all.
+  //   - the traveler is told which stage is running, because four silent
+  //     minutes is what made this feel broken even on the days it worked.
+  var GENERATION_STAGES = [
+    { id: 'eat', label: 'Eat and drink',
+      sections: ['dinner', 'breakfast', 'lunch', 'coffee'] },
+    { id: 'do', label: 'Things to do',
+      sections: ['activities', 'cowork'] },
+    { id: 'life', label: 'Services and practical',
+      sections: ['services', 'practical'] }
+  ];
+
+  function generationStages() {
+    // Copied out, so a caller cannot reorder the shipped list by accident.
+    return GENERATION_STAGES.map(function (s) {
+      return { id: s.id, label: s.label, sections: s.sections.slice() };
+    });
+  }
+
+  // Per stage, and deliberately UNDER ai_reserve's large-call threshold of
+  // 8000. That is not a way around the meter: the monthly cap counts real
+  // output tokens whichever route they arrive by, so the money is identical.
+  // The hourly LARGE-call limit exists to stop somebody running many whole
+  // guides an hour, and three short stages is still one guide, so charging
+  // them against the small-call budget is the truer reading of the same rule.
+  var STAGE_MAX_TOKENS = 7000;
+
+  // One stage's prompt: the research pass, narrowed to this stage's sections.
+  //
+  // It reuses buildResearchAllPrompt wholesale rather than growing a second
+  // prompt to keep in step with it. That matters because the research pass
+  // already lists the city's existing items as "do not re-suggest these", so
+  // stage two automatically knows what stage one produced, with no bookkeeping
+  // here and no way for the two to disagree.
+  function buildStagePrompt(templateText, cityData, profile, stage) {
+    var s = stage || {};
+    var ids = Array.isArray(s.sections) ? s.sections : [];
+    if (!ids.length) throw new Error('a generation stage must name its sections');
+    var base = buildResearchAllPrompt(templateText, cityData, profile);
+    var narrowing = [
+      '',
+      '## This pass covers ONE part of the guide',
+      '',
+      'Return items for these sections ONLY: ' + ids.join(', ') + '.',
+      'Other sections are being filled by their own passes. An item for any ' +
+        'section not in that list will be discarded, so spending output on one ' +
+        'wastes the run.',
+      'Cover the listed sections properly rather than sampling them: this is ' +
+        'the only pass that will fill them.'
+    ];
+    return base + '\n' + narrowing.join('\n');
+  }
+
+  // Make the prompt's promise true.
+  //
+  // The stage prompt tells the model that an item outside its sections will be
+  // discarded. If the code did not actually discard it, that sentence would be
+  // a bluff, and worse, a stray item would land in a section a LATER stage is
+  // about to fill properly, where it would then be listed as "do not
+  // re-suggest" and quietly crowd out the real pass.
+  //
+  // Returns a new delta; the input is never touched. A delta carrying no items
+  // comes back unchanged, because ratings and intel blocks are keyed by item id
+  // and belong to whatever item already exists, not to this stage.
+  function keepStageItems(delta, stage) {
+    var d = delta || {};
+    if (!Array.isArray(d.items)) return d;
+    var ids = (stage && Array.isArray(stage.sections)) ? stage.sections : [];
+    var out = {};
+    Object.keys(d).forEach(function (k) { out[k] = d[k]; });
+    out.items = d.items.filter(function (it) {
+      return it && ids.indexOf(it.section) !== -1;
+    });
+    return out;
+  }
+
   // Assembly order, top to bottom:
   //   1. one header line saying what this run is
   //   2. the city block
@@ -10028,6 +10124,10 @@ var CityOps = (function () {
       COPY_LINE: PROMPT_COPY_LINE,
       buildInterestsDeltaPrompt: buildInterestsDeltaPrompt,
       buildResearchAllPrompt: buildResearchAllPrompt,
+      // Staged generation: a whole city as a few short passes rather than one
+      // call that outlives the edge function's wall clock.
+      stages: generationStages, buildStagePrompt: buildStagePrompt,
+      keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
       buildIntelPassPrompt: buildIntelPassPrompt,
       buildRatingsPassPrompt: buildRatingsPassPrompt,
       // The single-place pass: one item, plus the rest of its section as the

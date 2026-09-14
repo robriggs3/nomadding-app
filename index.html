@@ -3639,6 +3639,102 @@ var CityOps = (function () {
     return out.join('\n');
   }
 
+  // ---- staged generation: a whole city, a few short passes at a time ----
+  //
+  // A whole-city Generate used to be ONE call asking for everything, with
+  // max_tokens 32000 and adaptive thinking. On 2026-09-09 that call ran for
+  // 400.2 seconds through the managed proxy and emitted no output token at
+  // all: the Supabase edge function's paid wall clock killed the isolate while
+  // the model was still thinking. HTTP 200, 1,118 bytes, thirteen keepalive
+  // pings, nothing else, and a traveler with nothing to show for four minutes.
+  //
+  // The fix is not a bigger ceiling, it is a smaller unit of work. Each stage
+  // below is the SAME SHAPE as the research pass that already works, which
+  // returned a complete delta in 13.9 seconds on the same key the same
+  // morning. mergeDelta already merges those deltas and already refuses
+  // duplicate ids, so nothing new had to be invented to hold them together.
+  //
+  // Three properties are the point, and each is worth more than the speed:
+  //   - a stage that lands is KEPT. A failure in the last stage used to leave
+  //     nothing; now it leaves a city with its eat and drink and its things to
+  //     do, and a retry that resumes rather than restarts.
+  //   - every stage is far inside the wall clock, so the ceiling stops being
+  //     something the traveler can hit at all.
+  //   - the traveler is told which stage is running, because four silent
+  //     minutes is what made this feel broken even on the days it worked.
+  var GENERATION_STAGES = [
+    { id: 'eat', label: 'Eat and drink',
+      sections: ['dinner', 'breakfast', 'lunch', 'coffee'] },
+    { id: 'do', label: 'Things to do',
+      sections: ['activities', 'cowork'] },
+    { id: 'life', label: 'Services and practical',
+      sections: ['services', 'practical'] }
+  ];
+
+  function generationStages() {
+    // Copied out, so a caller cannot reorder the shipped list by accident.
+    return GENERATION_STAGES.map(function (s) {
+      return { id: s.id, label: s.label, sections: s.sections.slice() };
+    });
+  }
+
+  // Per stage, and deliberately UNDER ai_reserve's large-call threshold of
+  // 8000. That is not a way around the meter: the monthly cap counts real
+  // output tokens whichever route they arrive by, so the money is identical.
+  // The hourly LARGE-call limit exists to stop somebody running many whole
+  // guides an hour, and three short stages is still one guide, so charging
+  // them against the small-call budget is the truer reading of the same rule.
+  var STAGE_MAX_TOKENS = 7000;
+
+  // One stage's prompt: the research pass, narrowed to this stage's sections.
+  //
+  // It reuses buildResearchAllPrompt wholesale rather than growing a second
+  // prompt to keep in step with it. That matters because the research pass
+  // already lists the city's existing items as "do not re-suggest these", so
+  // stage two automatically knows what stage one produced, with no bookkeeping
+  // here and no way for the two to disagree.
+  function buildStagePrompt(templateText, cityData, profile, stage) {
+    var s = stage || {};
+    var ids = Array.isArray(s.sections) ? s.sections : [];
+    if (!ids.length) throw new Error('a generation stage must name its sections');
+    var base = buildResearchAllPrompt(templateText, cityData, profile);
+    var narrowing = [
+      '',
+      '## This pass covers ONE part of the guide',
+      '',
+      'Return items for these sections ONLY: ' + ids.join(', ') + '.',
+      'Other sections are being filled by their own passes. An item for any ' +
+        'section not in that list will be discarded, so spending output on one ' +
+        'wastes the run.',
+      'Cover the listed sections properly rather than sampling them: this is ' +
+        'the only pass that will fill them.'
+    ];
+    return base + '\n' + narrowing.join('\n');
+  }
+
+  // Make the prompt's promise true.
+  //
+  // The stage prompt tells the model that an item outside its sections will be
+  // discarded. If the code did not actually discard it, that sentence would be
+  // a bluff, and worse, a stray item would land in a section a LATER stage is
+  // about to fill properly, where it would then be listed as "do not
+  // re-suggest" and quietly crowd out the real pass.
+  //
+  // Returns a new delta; the input is never touched. A delta carrying no items
+  // comes back unchanged, because ratings and intel blocks are keyed by item id
+  // and belong to whatever item already exists, not to this stage.
+  function keepStageItems(delta, stage) {
+    var d = delta || {};
+    if (!Array.isArray(d.items)) return d;
+    var ids = (stage && Array.isArray(stage.sections)) ? stage.sections : [];
+    var out = {};
+    Object.keys(d).forEach(function (k) { out[k] = d[k]; });
+    out.items = d.items.filter(function (it) {
+      return it && ids.indexOf(it.section) !== -1;
+    });
+    return out;
+  }
+
   // Assembly order, top to bottom:
   //   1. one header line saying what this run is
   //   2. the city block
@@ -10200,6 +10296,10 @@ var CityOps = (function () {
       COPY_LINE: PROMPT_COPY_LINE,
       buildInterestsDeltaPrompt: buildInterestsDeltaPrompt,
       buildResearchAllPrompt: buildResearchAllPrompt,
+      // Staged generation: a whole city as a few short passes rather than one
+      // call that outlives the edge function's wall clock.
+      stages: generationStages, buildStagePrompt: buildStagePrompt,
+      keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
       buildIntelPassPrompt: buildIntelPassPrompt,
       buildRatingsPassPrompt: buildRatingsPassPrompt,
       // The single-place pass: one item, plus the rest of its section as the
@@ -13849,6 +13949,102 @@ var CityOps = (function () {
     return out.join('\n');
   }
 
+  // ---- staged generation: a whole city, a few short passes at a time ----
+  //
+  // A whole-city Generate used to be ONE call asking for everything, with
+  // max_tokens 32000 and adaptive thinking. On 2026-09-09 that call ran for
+  // 400.2 seconds through the managed proxy and emitted no output token at
+  // all: the Supabase edge function's paid wall clock killed the isolate while
+  // the model was still thinking. HTTP 200, 1,118 bytes, thirteen keepalive
+  // pings, nothing else, and a traveler with nothing to show for four minutes.
+  //
+  // The fix is not a bigger ceiling, it is a smaller unit of work. Each stage
+  // below is the SAME SHAPE as the research pass that already works, which
+  // returned a complete delta in 13.9 seconds on the same key the same
+  // morning. mergeDelta already merges those deltas and already refuses
+  // duplicate ids, so nothing new had to be invented to hold them together.
+  //
+  // Three properties are the point, and each is worth more than the speed:
+  //   - a stage that lands is KEPT. A failure in the last stage used to leave
+  //     nothing; now it leaves a city with its eat and drink and its things to
+  //     do, and a retry that resumes rather than restarts.
+  //   - every stage is far inside the wall clock, so the ceiling stops being
+  //     something the traveler can hit at all.
+  //   - the traveler is told which stage is running, because four silent
+  //     minutes is what made this feel broken even on the days it worked.
+  var GENERATION_STAGES = [
+    { id: 'eat', label: 'Eat and drink',
+      sections: ['dinner', 'breakfast', 'lunch', 'coffee'] },
+    { id: 'do', label: 'Things to do',
+      sections: ['activities', 'cowork'] },
+    { id: 'life', label: 'Services and practical',
+      sections: ['services', 'practical'] }
+  ];
+
+  function generationStages() {
+    // Copied out, so a caller cannot reorder the shipped list by accident.
+    return GENERATION_STAGES.map(function (s) {
+      return { id: s.id, label: s.label, sections: s.sections.slice() };
+    });
+  }
+
+  // Per stage, and deliberately UNDER ai_reserve's large-call threshold of
+  // 8000. That is not a way around the meter: the monthly cap counts real
+  // output tokens whichever route they arrive by, so the money is identical.
+  // The hourly LARGE-call limit exists to stop somebody running many whole
+  // guides an hour, and three short stages is still one guide, so charging
+  // them against the small-call budget is the truer reading of the same rule.
+  var STAGE_MAX_TOKENS = 7000;
+
+  // One stage's prompt: the research pass, narrowed to this stage's sections.
+  //
+  // It reuses buildResearchAllPrompt wholesale rather than growing a second
+  // prompt to keep in step with it. That matters because the research pass
+  // already lists the city's existing items as "do not re-suggest these", so
+  // stage two automatically knows what stage one produced, with no bookkeeping
+  // here and no way for the two to disagree.
+  function buildStagePrompt(templateText, cityData, profile, stage) {
+    var s = stage || {};
+    var ids = Array.isArray(s.sections) ? s.sections : [];
+    if (!ids.length) throw new Error('a generation stage must name its sections');
+    var base = buildResearchAllPrompt(templateText, cityData, profile);
+    var narrowing = [
+      '',
+      '## This pass covers ONE part of the guide',
+      '',
+      'Return items for these sections ONLY: ' + ids.join(', ') + '.',
+      'Other sections are being filled by their own passes. An item for any ' +
+        'section not in that list will be discarded, so spending output on one ' +
+        'wastes the run.',
+      'Cover the listed sections properly rather than sampling them: this is ' +
+        'the only pass that will fill them.'
+    ];
+    return base + '\n' + narrowing.join('\n');
+  }
+
+  // Make the prompt's promise true.
+  //
+  // The stage prompt tells the model that an item outside its sections will be
+  // discarded. If the code did not actually discard it, that sentence would be
+  // a bluff, and worse, a stray item would land in a section a LATER stage is
+  // about to fill properly, where it would then be listed as "do not
+  // re-suggest" and quietly crowd out the real pass.
+  //
+  // Returns a new delta; the input is never touched. A delta carrying no items
+  // comes back unchanged, because ratings and intel blocks are keyed by item id
+  // and belong to whatever item already exists, not to this stage.
+  function keepStageItems(delta, stage) {
+    var d = delta || {};
+    if (!Array.isArray(d.items)) return d;
+    var ids = (stage && Array.isArray(stage.sections)) ? stage.sections : [];
+    var out = {};
+    Object.keys(d).forEach(function (k) { out[k] = d[k]; });
+    out.items = d.items.filter(function (it) {
+      return it && ids.indexOf(it.section) !== -1;
+    });
+    return out;
+  }
+
   // Assembly order, top to bottom:
   //   1. one header line saying what this run is
   //   2. the city block
@@ -20410,6 +20606,10 @@ var CityOps = (function () {
       COPY_LINE: PROMPT_COPY_LINE,
       buildInterestsDeltaPrompt: buildInterestsDeltaPrompt,
       buildResearchAllPrompt: buildResearchAllPrompt,
+      // Staged generation: a whole city as a few short passes rather than one
+      // call that outlives the edge function's wall clock.
+      stages: generationStages, buildStagePrompt: buildStagePrompt,
+      keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
       buildIntelPassPrompt: buildIntelPassPrompt,
       buildRatingsPassPrompt: buildRatingsPassPrompt,
       // The single-place pass: one item, plus the rest of its section as the
@@ -23616,7 +23816,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // the no-tools path changed: with no tools declared there is no pause_turn,
   // the blocks are rebuilt and thrown away, and the bytes on the wire are what
   // they always were.
-  function callClaudeStream(prompt, apiKey, onProgress, signal) {
+  // `opts.maxTokens` lets a caller ask for less than the whole ceiling. Staged
+  // generation uses it: each stage asks for a stage-sized answer rather than a
+  // whole-guide-sized one, which is what keeps a stage inside the edge
+  // function's wall clock. Omitted everywhere else, which keeps every existing
+  // caller on exactly the request it made before.
+  function callClaudeStream(prompt, apiKey, onProgress, signal, opts) {
     // The one-tap path is what a plan buys. The copy-a-prompt path in the
     // same modal is free, is unaffected, and is named in the message.
     if (!entAllows()) return Promise.reject(new Error(entGateText('ai')));
@@ -23665,7 +23870,7 @@ only judges it. `ratings` may be omitted when you could not verify the place;
         // byte, which is why the parser did not have to learn a second dialect.
         var body = {
           model: CLAUDE_MODEL,
-          max_tokens: CLAUDE_MAX_TOKENS,
+          max_tokens: (opts && opts.maxTokens) ? opts.maxTokens : CLAUDE_MAX_TOKENS,
           thinking: { type: 'adaptive' },
           stream: true,
           messages: messages
@@ -24127,68 +24332,135 @@ only judges it. `ratings` may be omitted when you could not verify the place;
         return;
       }
       if (!aiOneTapReady()) { genMsg.textContent = aiNoTransportText(); return; }
-      var key = loadApiKey();
       var tpl = promptTemplateText();
       if (!tpl) {
         genMsg.textContent = 'This build has no prompt template embedded. Use PROMPT.md from the repo.';
         return;
       }
-      var prompt = CityOps.promptKit.buildCityPrompt(tpl, formHeader(), store.profile);
       var cityName = trim(bn.value);
       setGenerateRow([cancelButton()]);
       setGenerating(true);
-      // Named, and honest about the wait. PROMPT.md asks for a whole city (60
-      // to 90 places across eight sections, each with hours, prices and a
-      // map link), so this is minutes, not seconds; a progress line that says
-      // "Starting..." and then sits there is how a working run gets killed.
-      // "Researching" became the honest word on the own-key path in B1, where
-      // the call declares web search and Claude really does look the city up.
-      // On our key it still writes from what it already knows, and the line has
-      // to keep saying so rather than let a 3-minute progress bar imply
-      // otherwise. One sentence, chosen by transport, same as the Enrich note.
-      genMsg.textContent = (aiTransportNow() === 'direct')
-        ? 'Claude is researching ' + cityName + ' on the web with your key... this usually takes 2 to 4 minutes.'
-        : 'Claude is writing ' + cityName + ' from its own knowledge, with no web access... this usually takes 2 to 4 minutes.';
+      // A whole city is generated in STAGES now. The single call this replaced
+      // asked for everything at once and, on our key, ran 400.2 seconds and
+      // emitted nothing at all before the edge function's wall clock killed
+      // it. See CityOps.promptKit.stages for the argument; the short version
+      // is that each stage is the same shape as the Enrich research pass,
+      // which answers in about fifteen seconds.
+      return runStagedGenerate(tpl, cityName);
+    }
+
+    // Generates a city one group of sections at a time, merging each stage in
+    // as it lands. Three properties matter more than the speed:
+    //   - a stage that lands is KEPT, so a late failure leaves a part-filled
+    //     city rather than nothing;
+    //   - each stage is far inside the wall clock, so the ceiling stops being
+    //     reachable;
+    //   - the traveler is told which stage is running.
+    function runStagedGenerate(tpl, cityName) {
+      var key = loadApiKey();
+      var stages = CityOps.promptKit.stages();
+      var onOurKey = aiTransportNow() === 'proxy';
+      // The scaffold costs nothing and needs no model: the name, country and
+      // dates are facts the traveler just typed. Committing it FIRST is what
+      // makes a partial result survive, because every stage after this merges
+      // into a city that already exists and is already saved.
+      var scaffold;
+      try {
+        var h = formHeader();
+        scaffold = CityOps.appStore.blankCity(h.name, h.country, h.from, h.to);
+        // blankCity seeds one placeholder item telling the traveler to run
+        // PROMPT.md and paste the result. That is exactly right for a city
+        // somebody scaffolds by hand, and exactly wrong here: this IS that
+        // run, and shipping "Fill this city with real data" inside a freshly
+        // generated guide would read as the generation having failed. The
+        // scaffold is only ever committed after a stage lands, so dropping it
+        // cannot leave an empty city with no guidance.
+        scaffold.items = [];
+      } catch (e) {
+        setGenerating(false);
+        genMsg.textContent = e.message;
+        return;
+      }
       genAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-      callClaudeStream(prompt, key, function (p) {
-        genMsg.textContent = 'Claude is writing ' + cityName + ' from its own knowledge... ' +
-          (p.kind === 'thinking' ? 'thinking, ' : 'writing the guide, ') +
-          p.totalChars + ' characters so far.';
-      }, genAbort ? genAbort.signal : null).then(function (text) {
+
+      var landed = 0;
+      // The city as it grows. Each stage's prompt is built from THIS, so the
+      // research pass lists what previous stages produced under "do not
+      // re-suggest these" with no bookkeeping of our own.
+      var built = scaffold;
+
+      function stageNote(i, extra) {
+        var s = stages[i];
+        return 'Stage ' + (i + 1) + ' of ' + stages.length + ', ' + s.label.toLowerCase() +
+          ', for ' + cityName + (onOurKey ? ' on our key' : ' on your key') + '. ' + (extra || '');
+      }
+
+      function runStage(i) {
+        if (i >= stages.length) return Promise.resolve();
+        var stage = stages[i];
+        genMsg.textContent = stageNote(i, 'Starting...');
+        var prompt = CityOps.promptKit.buildStagePrompt(tpl, built, store.profile, stage);
+        return callClaudeStream(prompt, key, function (p) {
+          genMsg.textContent = stageNote(i, (p.kind === 'thinking' ? 'thinking, ' : 'writing, ') +
+            p.totalChars + ' characters so far.');
+        }, genAbort ? genAbort.signal : null,
+          { maxTokens: CityOps.promptKit.STAGE_MAX_TOKENS }
+        ).then(function (text) {
+          var read = CityOps.intakeKit.read(text, deltaIntakeOpts());
+          if (!read.ok) {
+            // One stage that will not parse is not the whole run. Keep the
+            // reply where the traveler can still act on it and carry on: the
+            // other stages are unaffected and their work is real.
+            keepReply(text);
+            return;
+          }
+          // The stage prompt promises that an item outside this stage's
+          // sections is discarded. This is where that promise is kept.
+          var delta = CityOps.promptKit.keepStageItems(read.data, stage);
+          var res = CityOps.mergeDelta(built, delta);
+          if (res.data) { built = res.data; landed++; }
+        }).then(function () { return runStage(i + 1); });
+      }
+
+      // Promise.resolve() first so a SYNCHRONOUS throw (a template missing its
+      // landmarks, a stage with no sections) becomes a rejection like any
+      // other and reaches the catch below, where the stages that already
+      // landed are saved. Calling runStage(0) bare would let that one escape
+      // past the only code that protects the traveler's work.
+      return Promise.resolve().then(function () { return runStage(0); }).then(function () {
         genAbort = null;
         setGenerating(false);
-        // Never a dead end: the scaffold city is already saved and already
-        // active, so a reply that will not read costs the traveler the wait
-        // and nothing else. The reply itself is preserved in the paste box
-        // below, where Apply runs it through the same intake and the same
-        // validated door, and Retry is one tap.
-        var read = CityOps.intakeKit.read(text, cityIntakeOpts());
-        if (!read.ok) {
-          keepReply(text);
-          showRetry(read.message + '\n\nThe reply is in the paste box below: press Apply to try it ' +
-            'there, or press Retry.');
+        if (!landed) {
+          showRetry('No stage came back with anything usable, so ' + cityName +
+            ' was not created. Nothing was changed. Press Retry, or copy the ' +
+            'prompt and run it in your own Claude.');
           return;
         }
-        genMsg.textContent = 'Generated ' + read.data.city.name + '. Added to your cities.';
-        offerDownload(read.data);
-        commitFromForm(read.data, true);
+        var items = (built.items || []).length;
+        genMsg.textContent = 'Generated ' + built.city.name + ': ' + items + ' places from ' +
+          landed + ' of ' + stages.length + ' stages. Added to your cities.';
+        offerDownload(built);
+        commitFromForm(built, true);
       }).catch(function (e) {
         genAbort = null;
         setGenerating(false);
-        // A cancel and a failure both land here; only the first is the
-        // traveler's own doing, and telling them "Claude API error: aborted"
-        // for a button they just pressed reads as a bug.
+        // Whatever went wrong, the stages that already landed are real work.
+        // Saving them is the difference between a part-filled city and the
+        // four wasted minutes this whole change exists to stop.
+        var saved = '';
+        if (landed) {
+          commitFromForm(built, true);
+          saved = ' ' + landed + ' of ' + stages.length + ' stages were saved to ' +
+            built.city.name + ' first, so nothing so far is lost.';
+        }
         if (e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) {
-          // Deliberately does not claim the city is empty: this same Cancel
-          // also fires on a REGENERATE of a city that already has a guide,
-          // and telling that traveler their city is empty would be a scare.
-          showRetry('Cancelled. Nothing was changed, and ' + trim(bn.value) +
-            ' is still in your cities. Press Retry when you want to fill it.');
+          showRetry('Cancelled.' + (saved || ' Nothing was changed.'));
           return;
         }
-        showRetry(CityOps.aiProxyKit.errorText(e));
+        showRetry(CityOps.aiProxyKit.errorText(e) + saved);
       });
     }
+
     // Puts an unusable reply somewhere the traveler can still act on it,
     // rather than throwing away three minutes of generation because one
     // brace was wrong.

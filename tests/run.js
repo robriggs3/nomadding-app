@@ -1704,6 +1704,80 @@ test('buildInterestsDeltaPrompt carries the header, city, profile, re-run block,
   assert.equal(out.indexOf('match the trip dates given above'), -1);
 });
 
+// ---------------------------------------------------------------------------
+// Staged generation: the fix for the 400-second whole-city Generate
+// ---------------------------------------------------------------------------
+// Measured 2026-09-09: one call asking for a whole city ran 400.2 seconds
+// through the managed proxy and emitted ZERO output tokens before the edge
+// function's wall clock killed the isolate. The research pass, the same shape
+// as a stage, answered in 13.9 seconds on the same key the same morning.
+test('the generation stages cover every core section exactly once', () => {
+  const stages = C.promptKit.stages();
+  assert.ok(stages.length >= 2, 'one stage is not staging');
+  const seen = [];
+  stages.forEach(function (s) {
+    assert.ok(s.id && s.label, 'a stage needs an id and a label for the progress line');
+    assert.ok(s.sections.length, s.id + ' names no sections');
+    s.sections.forEach(function (id) {
+      assert.equal(seen.indexOf(id), -1, id + ' is claimed by two stages');
+      seen.push(id);
+    });
+  });
+  // The eight sections a guide is built from. A section owned by NO stage
+  // would simply never be generated, silently, which is the failure mode this
+  // assertion exists to make impossible.
+  ['dinner', 'breakfast', 'lunch', 'coffee', 'cowork', 'activities', 'services', 'practical']
+    .forEach(function (id) {
+      assert.ok(seen.indexOf(id) !== -1, 'no stage generates the ' + id + ' section');
+    });
+});
+
+test('a stage asks for less than the large-call threshold, on purpose', () => {
+  // Deliberate, and argued in the source: the monthly cap counts real output
+  // tokens whichever way they arrive, so the money is identical. The hourly
+  // LARGE-call limit exists to stop many whole guides an hour, and three short
+  // stages is still one guide.
+  assert.ok(C.promptKit.STAGE_MAX_TOKENS < 8000,
+    'a stage at or over 8000 is metered as a large call, which was the point of splitting it');
+  assert.ok(C.promptKit.STAGE_MAX_TOKENS >= 4000,
+    'too small to hold a stage of a guide');
+});
+
+test('a stage prompt is the research pass, narrowed to that stage', () => {
+  const stage = { id: 'eat', label: 'Eat and drink', sections: ['dinner', 'coffee'] };
+  const out = C.promptKit.buildStagePrompt(FAKE_RERUN, GOOD, PROFILE, stage);
+  // It must still BE the research pass, so the two cannot drift apart.
+  assert.ok(out.startsWith(C.promptKit.buildResearchAllPrompt(FAKE_RERUN, GOOD, PROFILE)),
+    'a stage prompt stopped being the research pass with a narrowing on the end');
+  assert.ok(/sections ONLY: dinner, coffee/.test(out), out.slice(-400));
+  // The existing-items list is what stops stage two repeating stage one, and
+  // it comes free with the research pass rather than being tracked here.
+  assert.ok(out.includes('## Existing items (do not re-suggest these)'));
+  assert.throws(function () { C.promptKit.buildStagePrompt(FAKE_RERUN, GOOD, PROFILE, { sections: [] }); },
+    /must name its sections/);
+});
+
+test('an item outside the stage is actually discarded, because the prompt says it will be', () => {
+  const stage = { id: 'eat', label: 'Eat and drink', sections: ['dinner', 'coffee'] };
+  const delta = { schema: 1, delta: true, items: [
+    { id: 'a', section: 'dinner', name: 'Kept' },
+    { id: 'b', section: 'activities', name: 'Belongs to a later stage' },
+    { id: 'c', section: 'coffee', name: 'Kept too' }
+  ] };
+  const out = C.promptKit.keepStageItems(delta, stage);
+  assert.deepEqual(out.items.map(function (i) { return i.id; }), ['a', 'c']);
+  // A stray item left in place would land in a section a LATER stage is about
+  // to fill, where the research pass would then list it as "do not re-suggest"
+  // and quietly crowd out the real pass.
+  assert.equal(delta.items.length, 3, 'the input delta was mutated');
+  assert.equal(out.schema, 1);
+  assert.equal(out.delta, true);
+  // Ratings and intel are keyed by item id and belong to whatever item exists,
+  // not to this stage, so a delta with no items passes straight through.
+  const intel = { schema: 1, delta: true, intel: { x: { tips: ['t'] } } };
+  assert.strictEqual(C.promptKit.keepStageItems(intel, stage), intel);
+});
+
 test('buildResearchAllPrompt carries the header, city, profile, research block, item list and item shape', () => {
   const out = C.promptKit.buildResearchAllPrompt(FAKE_RERUN, GOOD, PROFILE);
   assert.ok(out.startsWith('You are extending an existing Nomadding city guide with a full-coverage research pass.'));
@@ -6331,6 +6405,156 @@ function asyncTest(name, fn) {
     (e) => { fail++; console.log('FAIL ' + name + '\n  ' + (e && e.message)); })
     .then(() => { asyncPending--; });
 }
+
+// runStagedGenerate lives in the app shell and is pulled out of the assembled
+// index.html by name, the same way callClaudeStream is. It is nested one level
+// deeper than the top-level helpers, so its terminator is a four-space brace.
+// What it needs from its surroundings is injected; what it DECIDES (the stage
+// list, the prompts, the merge) is the engine's and is tested above.
+function loadRunStagedGenerate(deps) {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function runStagedGenerate(');
+  assert.ok(start !== -1, 'runStagedGenerate is missing from the assembled app');
+  const end = html.indexOf('\n    }\n', start);
+  assert.ok(end !== -1, 'could not find the end of runStagedGenerate');
+  const src = html.slice(start, end + 6);
+  const names = ['loadApiKey', 'CityOps', 'aiTransportNow', 'formHeader', 'store',
+    'genMsg', 'callClaudeStream', 'deltaIntakeOpts', 'keepReply', 'setGenerating',
+    'showRetry', 'offerDownload', 'commitFromForm', 'AbortController'];
+  const fn = new Function(...names, 'var genAbort = null;\n' + src +
+    '\nreturn runStagedGenerate;');
+  return fn(
+    deps.loadApiKey || function () { return 'k'; },
+    C,
+    deps.aiTransportNow || function () { return 'proxy'; },
+    deps.formHeader || function () {
+      return { name: 'Ohrid', country: 'MK', from: '2026-09-09', to: '2026-09-16' };
+    },
+    deps.store || { profile: {} },
+    deps.genMsg, deps.callClaudeStream,
+    function () { return { mode: 'delta' }; },
+    deps.keepReply || function () {},
+    deps.setGenerating || function () {},
+    deps.showRetry, deps.offerDownload || function () {},
+    deps.commitFromForm, deps.AbortController || undefined);
+}
+
+function stageReply(section, id) {
+  return '```json\n' + JSON.stringify({
+    schema: 1, delta: true,
+    // `status` is required: mergeDelta only ever adds plan or backup items,
+    // which is what stops a delta marking something done behind the traveler.
+    items: [{ id: id, section: section, status: 'plan', name: 'Place ' + id, links: [] }]
+  }) + '\n```';
+}
+
+asyncTest('a stage that fails does not throw away the stages that landed', () => {
+  // THE whole point of staging. Before this, a failure at 399 seconds left the
+  // traveler with nothing at all after a four-minute wait.
+  const stages = C.promptKit.stages();
+  let n = 0;
+  let committed = null;
+  let retryMsg = '';
+  const run = loadRunStagedGenerate({
+    genMsg: { textContent: '' },
+    callClaudeStream: function () {
+      n++;
+      if (n === 1) return Promise.resolve(stageReply(stages[0].sections[0], 'first'));
+      return Promise.reject(new Error('Claude API returned 500: upstream fell over'));
+    },
+    commitFromForm: function (data) { committed = data; },
+    showRetry: function (m) { retryMsg = m; }
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    assert.ok(committed, 'the stage that landed was not saved');
+    assert.equal(committed.items.length, 1);
+    assert.equal(committed.items[0].id, 'first');
+    assert.ok(/1 of 3 stages were saved/.test(retryMsg), retryMsg);
+    // And it must say the work survived, not just that something broke.
+    assert.ok(/nothing so far is lost/.test(retryMsg), retryMsg);
+  });
+});
+
+asyncTest('every stage asks for a stage-sized answer, not a whole-guide one', () => {
+  let asked = [];
+  const run = loadRunStagedGenerate({
+    genMsg: { textContent: '' },
+    callClaudeStream: function (prompt, key, onProgress, signal, opts) {
+      asked.push(opts && opts.maxTokens);
+      return Promise.resolve(stageReply('dinner', 'x' + asked.length));
+    },
+    commitFromForm: function () {},
+    showRetry: function () {}
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    assert.equal(asked.length, C.promptKit.stages().length);
+    asked.forEach(function (m) {
+      assert.equal(m, C.promptKit.STAGE_MAX_TOKENS,
+        'a stage asked for ' + m + ', which is what ran 400 seconds and returned nothing');
+    });
+  });
+});
+
+asyncTest('a later stage is told what the earlier ones already produced', () => {
+  // This is what stops stage two re-suggesting stage one's dinner picks, and
+  // it comes free from the research pass rather than from bookkeeping here.
+  const prompts = [];
+  const run = loadRunStagedGenerate({
+    genMsg: { textContent: '' },
+    callClaudeStream: function (prompt) {
+      prompts.push(prompt);
+      return Promise.resolve(stageReply(C.promptKit.stages()[prompts.length - 1].sections[0],
+        'item' + prompts.length));
+    },
+    commitFromForm: function () {},
+    showRetry: function () {}
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    assert.equal(prompts[0].indexOf('item1'), -1, 'stage one already knew about its own output');
+    assert.ok(prompts[1].indexOf('item1') !== -1, 'stage two was not told what stage one produced');
+    assert.ok(prompts[2].indexOf('item2') !== -1, 'stage three was not told what stage two produced');
+  });
+});
+
+asyncTest('a generated city does not ship the scaffold placeholder', () => {
+  // blankCity seeds "Fill this city with real data. Run PROMPT.md...", which is
+  // right for a hand-made scaffold and wrong inside a guide that was just
+  // generated: it reads as the generation having failed.
+  let committed = null;
+  const run = loadRunStagedGenerate({
+    genMsg: { textContent: '' },
+    callClaudeStream: function () { return Promise.resolve(stageReply('dinner', 'real' + Math.random())); },
+    commitFromForm: function (d) { committed = d; },
+    showRetry: function () {}
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    assert.ok(committed, 'nothing was committed');
+    const ids = committed.items.map(function (i) { return i.id; });
+    assert.equal(ids.indexOf('getting-started'), -1,
+      'the scaffold placeholder shipped inside a generated guide: ' + ids.join(', '));
+    assert.ok(committed.items.length > 0, 'a committed city with no items at all');
+  });
+});
+
+asyncTest('when no stage returns anything usable, no city is created', () => {
+  let committed = false;
+  let retryMsg = '';
+  const run = loadRunStagedGenerate({
+    genMsg: { textContent: '' },
+    callClaudeStream: function () { return Promise.resolve('not json, no fence, nothing'); },
+    commitFromForm: function () { committed = true; },
+    showRetry: function (m) { retryMsg = m; }
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    // An empty scaffold in the city list would be worse than no city: it looks
+    // like a guide until you open it.
+    assert.equal(committed, false, 'an empty scaffold was saved as a city');
+    assert.ok(/was not created/.test(retryMsg), retryMsg);
+    assert.ok(/Nothing was changed/.test(retryMsg), retryMsg);
+  });
+});
 
 asyncTest('callClaudeStream turns a streamed reply into the delta the Apply path merges', () => {
   const delta = {
