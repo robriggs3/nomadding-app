@@ -4809,13 +4809,34 @@ var CityOps = (function () {
     });
   }
 
-  // Per stage, and deliberately UNDER ai_reserve's large-call threshold of
-  // 8000. That is not a way around the meter: the monthly cap counts real
-  // output tokens whichever route they arrive by, so the money is identical.
-  // The hourly LARGE-call limit exists to stop somebody running many whole
-  // guides an hour, and three short stages is still one guide, so charging
-  // them against the small-call budget is the truer reading of the same rule.
-  var STAGE_MAX_TOKENS = 7000;
+  // Per stage. This was 7000 for one release, chosen to sit under ai_reserve's
+  // large-call threshold of 8000, and that was a mistake worth leaving written
+  // down: it sized the answer to suit the METER instead of the work, and the
+  // work did not fit.
+  //
+  // Measured against the live proxy on 2026-09-14, one stage, same prompt:
+  //   7000, thinking adaptive   -> out 7000 (the ceiling), NO text at all,
+  //                               the whole budget spent on thinking
+  //   7000, thinking disabled   -> out 7000 (the ceiling), text truncated
+  //                               mid-structure, nothing usable
+  //   12000, thinking disabled  -> out 6814, finished on its own, 15 items
+  // A stage needs a shade under 7000 tokens to say what it has to say, so a
+  // 7000 ceiling cut it off every single time.
+  //
+  // 12000 is over the large-call threshold, so each stage IS metered as a
+  // large call and one guide spends three of the five an hour. That is the
+  // honest trade: a guide a traveler can actually generate, with room for one
+  // retry in the same hour, beats three cheap calls that always truncate.
+  var STAGE_MAX_TOKENS = 12000;
+
+  // Stages do NOT think.
+  //
+  // With adaptive thinking on, two of three stages spent the ENTIRE output
+  // budget reasoning and emitted no text whatsoever (2026-09-14). A stage is
+  // not a reasoning problem: it is a contract, a list of sections, and a list
+  // of places not to repeat, all spelled out in the prompt. Thinking here buys
+  // nothing and competes with the answer for the same tokens.
+  var STAGE_THINKING = { type: 'disabled' };
 
   // One stage's prompt: the research pass, narrowed to this stage's sections.
   //
@@ -11431,6 +11452,7 @@ var CityOps = (function () {
       // call that outlives the edge function's wall clock.
       stages: generationStages, buildStagePrompt: buildStagePrompt,
       keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
+      STAGE_THINKING: STAGE_THINKING,
       buildIntelPassPrompt: buildIntelPassPrompt,
       buildRatingsPassPrompt: buildRatingsPassPrompt,
       // The single-place pass: one item, plus the rest of its section as the

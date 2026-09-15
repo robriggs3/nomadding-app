@@ -2446,7 +2446,10 @@
         var body = {
           model: CLAUDE_MODEL,
           max_tokens: (opts && opts.maxTokens) ? opts.maxTokens : CLAUDE_MAX_TOKENS,
-          thinking: { type: 'adaptive' },
+          // Stages pass `thinking: disabled`: a stage is a contract to fill,
+          // not a problem to reason about, and on 2026-09-14 adaptive thinking
+          // ate a whole stage's output budget without emitting a word.
+          thinking: (opts && opts.thinking) ? opts.thinking : { type: 'adaptive' },
           stream: true,
           messages: messages
         };
@@ -2979,7 +2982,8 @@
           genMsg.textContent = stageNote(i, (p.kind === 'thinking' ? 'thinking, ' : 'writing, ') +
             p.totalChars + ' characters so far.');
         }, genAbort ? genAbort.signal : null,
-          { maxTokens: CityOps.promptKit.STAGE_MAX_TOKENS }
+          { maxTokens: CityOps.promptKit.STAGE_MAX_TOKENS,
+            thinking: CityOps.promptKit.STAGE_THINKING }
         ).then(function (text) {
           var read = CityOps.intakeKit.read(text, deltaIntakeOpts());
           if (!read.ok) {

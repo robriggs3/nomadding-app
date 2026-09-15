@@ -1732,15 +1732,26 @@ test('the generation stages cover every core section exactly once', () => {
     });
 });
 
-test('a stage asks for less than the large-call threshold, on purpose', () => {
-  // Deliberate, and argued in the source: the monthly cap counts real output
-  // tokens whichever way they arrive, so the money is identical. The hourly
-  // LARGE-call limit exists to stop many whole guides an hour, and three short
-  // stages is still one guide.
-  assert.ok(C.promptKit.STAGE_MAX_TOKENS < 8000,
-    'a stage at or over 8000 is metered as a large call, which was the point of splitting it');
-  assert.ok(C.promptKit.STAGE_MAX_TOKENS >= 4000,
-    'too small to hold a stage of a guide');
+test('a stage is sized to fit its answer, not to fit the meter', () => {
+  // REWRITTEN 2026-09-14, not deleted. This used to assert the opposite:
+  // STAGE_MAX_TOKENS < 8000, to keep a stage under ai_reserve's large-call
+  // threshold. That sized the answer to suit the METER, and measurement
+  // against the live proxy showed the work did not fit: at 7000 a stage hit
+  // the ceiling and truncated EVERY time, with thinking on and with it off.
+  // At 12000 the same stage finished on its own at 6814 tokens and merged 15
+  // items. A stage needs a shade under 7000 tokens to say what it has to say.
+  assert.ok(C.promptKit.STAGE_MAX_TOKENS >= 10000,
+    'a stage this small truncates: measured, 7000 was not enough for one stage');
+  // Still meaningfully smaller than a whole guide, or this is not staging.
+  assert.ok(C.promptKit.STAGE_MAX_TOKENS <= 16000,
+    'a stage this large is most of a whole guide again');
+});
+
+test('stages do not think, because thinking ate the whole answer', () => {
+  // Measured 2026-09-14: with adaptive thinking, two of three stages spent the
+  // entire output budget reasoning and emitted no text at all. A stage is a
+  // contract to fill, not a problem to reason about.
+  assert.deepEqual(C.promptKit.STAGE_THINKING, { type: 'disabled' });
 });
 
 test('a stage prompt is the research pass, narrowed to that stage', () => {
@@ -6482,7 +6493,7 @@ asyncTest('every stage asks for a stage-sized answer, not a whole-guide one', ()
   const run = loadRunStagedGenerate({
     genMsg: { textContent: '' },
     callClaudeStream: function (prompt, key, onProgress, signal, opts) {
-      asked.push(opts && opts.maxTokens);
+      asked.push(opts);
       return Promise.resolve(stageReply('dinner', 'x' + asked.length));
     },
     commitFromForm: function () {},
@@ -6490,9 +6501,13 @@ asyncTest('every stage asks for a stage-sized answer, not a whole-guide one', ()
   });
   return run(FAKE_RERUN, 'Ohrid').then(function () {
     assert.equal(asked.length, C.promptKit.stages().length);
-    asked.forEach(function (m) {
-      assert.equal(m, C.promptKit.STAGE_MAX_TOKENS,
-        'a stage asked for ' + m + ', which is what ran 400 seconds and returned nothing');
+    asked.forEach(function (o) {
+      assert.equal(o && o.maxTokens, C.promptKit.STAGE_MAX_TOKENS,
+        'a stage asked for ' + (o && o.maxTokens) + ' tokens');
+      // Sent per call, not left to the default: the default is adaptive, and
+      // adaptive is what emitted nothing.
+      assert.deepEqual(o && o.thinking, { type: 'disabled' },
+        'a stage was sent with thinking left on');
     });
   });
 });
