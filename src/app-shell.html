@@ -1629,9 +1629,31 @@
     return added.cityId;
   }
 
+  // What a section is called when the app counts what landed in it.
+  var SECTION_NOUNS = {
+    dinner: 'dinner pick', breakfast: 'breakfast pick', lunch: 'lunch pick',
+    coffee: 'coffee stop', cowork: 'place to work', activities: 'thing to do',
+    services: 'service', practical: 'practical note', interests: 'interest pick'
+  };
+
+  function addedBySectionText(by) {
+    var ids = Object.keys(by || {});
+    if (!ids.length) return '';
+    ids.sort(function (a, b) { return by[b] - by[a]; });
+    return ids.map(function (id) {
+      var n = by[id];
+      var noun = SECTION_NOUNS[id] || (id + ' item');
+      return n + ' ' + noun + (n === 1 ? '' : 's');
+    }).join(', ');
+  }
+
   function enrichSummaryText(s) {
     var parts = [];
-    if (s.added) parts.push(s.added + ' added');
+    // Named by section when we know the sections, because a Dinner re-run
+    // reporting "9 added" does not tell the traveler the dinners arrived.
+    var bySection = addedBySectionText(s.addedBySection);
+    if (s.added && bySection) parts.push('added ' + bySection);
+    else if (s.added) parts.push(s.added + ' added');
     if (s.skipped) parts.push(s.skipped + ' skipped');
     if (s.sectionsAdded) parts.push(s.sectionsAdded + (s.sectionsAdded === 1 ? ' section' : ' sections'));
     if (s.intelApplied) parts.push(s.intelApplied + ' intel applied');
@@ -1822,6 +1844,17 @@
         if (kind === 'research') return CityOps.promptKit.buildResearchAllPrompt(tpl, currentData(), store.profile);
         if (kind === 'intel') return CityOps.promptKit.buildIntelPassPrompt(tpl, currentData());
         if (kind === 'ratings') return CityOps.promptKit.buildRatingsPassPrompt(tpl, currentData());
+        // One SECTION at a time. A whole-guide prompt pasted into a chat comes
+        // back trimmed by that chat's own output limit, which is the other half
+        // of how a nine-day city ended up with three dinners. One section asks
+        // for less than any chat will cut off, and the counts it prints are
+        // computed from the stay. Built on buildStagePrompt, the same function
+        // the in-app stages use, so the two cannot drift apart.
+        var sec = SECTION_PASSES[kind];
+        if (sec) {
+          return CityOps.promptKit.buildStagePrompt(tpl, currentData(), store.profile,
+            { id: kind, label: sec.chip, sections: sec.sections });
+        }
         return CityOps.promptKit.buildInterestsDeltaPrompt(tpl, currentData(), store.profile);
       } catch (e) {
         msg.textContent = e.message;
@@ -1879,6 +1912,13 @@
     // every city page, so the control needs no explaining. Run with Claude goes
     // FIRST because it is the action people want; Copy and Download follow as
     // the fallbacks they actually are.
+    // The four a traveler actually re-runs when a section came back thin.
+    var SECTION_PASSES = {
+      dinner: { chip: 'Dinner', sections: ['dinner'] },
+      daytime: { chip: 'Daytime', sections: ['breakfast', 'lunch', 'coffee'] },
+      activities: { chip: 'Activities', sections: ['activities'] },
+      services: { chip: 'Services', sections: ['services', 'practical'] }
+    };
     var PASSES = [
       { kind: 'research', chip: 'Research', file: 'research-city.md', noun: 'research',
         desc: 'One pass across eat, see, do and services, weighted to your profile. ' +
@@ -1891,7 +1931,20 @@
           'from what reviewers say repeatedly.' },
       { kind: 'ratings', chip: 'Ratings', file: 'ratings-refresh.md', noun: 'ratings',
         desc: 'Current Google Maps stars and review counts for the places still in ' +
-          'play (plan and backup), as a badge on each card.' }
+          'play (plan and backup), as a badge on each card.' },
+      // One section at a time, for when a section came back thin. Each asks for
+      // a count computed from the length of this stay, and each is small enough
+      // that a chat will not trim the answer.
+      { kind: 'dinner', chip: 'Dinner', file: 'dinner-pass.md', noun: 'dinner',
+        desc: 'Dinner only: one pick for every evening of this stay, plus backups. ' +
+          'Small enough that a chat returns the whole answer.' },
+      { kind: 'daytime', chip: 'Daytime', file: 'daytime-pass.md', noun: 'daytime',
+        desc: 'Breakfast, lunch and coffee, scaled to the length of this stay.' },
+      { kind: 'activities', chip: 'Activities', file: 'activities-pass.md', noun: 'activities',
+        desc: 'Things to do: one anchor for each day, plus spares for weather and closures.' },
+      { kind: 'services', chip: 'Services', file: 'services-pass.md', noun: 'services',
+        desc: 'The practical layer: SIM, pharmacy, laundry, a reliable ATM, getting in ' +
+          'and out.' }
     ];
     // Research leads: it is the pass that fills an empty city, which is the
     // state this modal is most often opened in.
@@ -2936,7 +2989,6 @@
     //   - the traveler is told which stage is running.
     function runStagedGenerate(tpl, cityName) {
       var key = loadApiKey();
-      var stages = CityOps.promptKit.stages();
       var onOurKey = aiTransportNow() === 'proxy';
       // The scaffold costs nothing and needs no model: the name, country and
       // dates are facts the traveler just typed. Committing it FIRST is what
@@ -2959,6 +3011,11 @@
         genMsg.textContent = e.message;
         return;
       }
+      // The stage list follows the STAY, so it is read AFTER the scaffold that
+      // carries the dates: a nine-night city is generated in five sittings, a
+      // three-night one in three, and no single answer has to hold more than
+      // it can say.
+      var stages = CityOps.promptKit.stages(scaffold);
       genAbort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
 
       var landed = 0;

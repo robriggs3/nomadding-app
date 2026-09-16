@@ -497,9 +497,12 @@ Cover each of these categories that makes sense for this city:
 
 Rules:
 
-- Return 10 to 18 new items in total, spread across the categories above so no
-  single one dominates. Weight the count toward the traveler's interests where
-  the city supports it.
+- Return exactly the counts given under "How many" above. They are computed
+  from the length of this stay: one dinner per evening, one anchor per day, and
+  backups on top. A fixed total cannot serve a three-night stay and a nine-night
+  one, and the nine-night traveler is the one who finds three restaurants for
+  nine evenings. Weight WHICH places you pick toward the traveler's interests;
+  do not weight how many.
 - Put each item in the section it belongs to, and use ONLY these section ids:
   `dinner`, `breakfast`, `lunch`, `coffee`, `cowork`, `activities`, `services`,
   `practical`, `interests`. These exact ids are what file an item under the

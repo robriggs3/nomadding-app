@@ -1387,7 +1387,7 @@ const DELTA = {
 test('mergeDelta adds new items and new sections and counts them', () => {
   const r = C.mergeDelta(GOOD, clone(DELTA));
   assert.deepEqual(r.errors, []);
-  assert.deepEqual(r.summary, { added: 2, skipped: 0, sectionsAdded: 1, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+  assert.deepEqual(r.summary, { added: 2, addedBySection: { coffee: 1, interests: 1 }, skipped: 0, sectionsAdded: 1, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.equal(r.data.sections.length, 3);
   assert.equal(r.data.sections[2].id, 'interests');   // appended, never reordered
   assert.equal(r.data.items.length, GOOD.items.length + 2);
@@ -1417,7 +1417,7 @@ test('mergeDelta applied twice is a no-op: everything is already there', () => {
   const second = C.mergeDelta(first.data, clone(DELTA));
   assert.deepEqual(second.errors, []);
   assert.deepEqual(second.summary,
-    { added: 0, skipped: 2, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, addedBySection: {}, skipped: 2, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.deepEqual(second.data, first.data);
 });
 
@@ -1513,7 +1513,7 @@ test('mergeDelta rejects a bad envelope, unknown section, done status and bad in
   assert.equal(bad({ sections: 'nope' }).data, null);
   // A rejected delta reports a zeroed summary: nothing partial ever happened.
   assert.deepEqual(bad({ schema: 2 }).summary,
-    { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, addedBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 
 test('mergeDelta applies intel to existing ids and counts unknown ids as skipped', () => {
@@ -1711,6 +1711,110 @@ test('buildInterestsDeltaPrompt carries the header, city, profile, re-run block,
 // through the managed proxy and emitted ZERO output tokens before the edge
 // function's wall clock killed the isolate. The research pass, the same shape
 // as a stage, answered in 13.9 seconds on the same key the same morning.
+// ---------------------------------------------------------------------------
+// Counts that scale with the stay (Rob, mid-trip, 2026-09-16)
+// ---------------------------------------------------------------------------
+// A 9-day city came back with THREE places to eat. Nothing was broken:
+// PROMPT.md asked for "10 to 18 new items in total, spread across the
+// categories", and the eat stage split that share four ways. Three dinners for
+// nine evenings is that arithmetic working exactly as written.
+function cityOfDays(from, to) {
+  return { schema: 1, city: { name: 'Ohrid', country: 'MK', dates: { from: from, to: to } },
+    sections: [], items: [] };
+}
+const NINE_DAY = cityOfDays('2026-09-20', '2026-09-28');
+const THREE_DAY = cityOfDays('2026-09-20', '2026-09-22');
+
+test('a nine-day stay asks for a dinner every evening, a three-day stay for three', () => {
+  const nine = C.promptKit.coverageTargets(NINE_DAY);
+  const three = C.promptKit.coverageTargets(THREE_DAY);
+  assert.equal(nine.days, 9);
+  assert.equal(three.days, 3);
+  // The whole bug in one pair of assertions: the count has to MOVE with the
+  // stay, and dinner has to have one per evening.
+  assert.equal(nine.sections.dinner.picks, 9);
+  assert.equal(three.sections.dinner.picks, 3);
+  assert.ok(nine.sections.dinner.picks > three.sections.dinner.picks,
+    'dinner did not scale with the stay, which is the bug this exists for');
+  // Backups: max(5, ceil(days/2)), so a short stay still has somewhere to fall
+  // back to when a place is shut.
+  assert.equal(nine.sections.dinner.backups, 5);
+  assert.equal(three.sections.dinner.backups, 5);
+  // Daytime: ceil(days/3), floor of 3.
+  [nine, three].forEach(function (t) {
+    ['breakfast', 'lunch', 'coffee'].forEach(function (id) {
+      assert.ok(t.sections[id].picks >= 3, id + ' fell under the floor of 3');
+    });
+  });
+  assert.equal(nine.sections.breakfast.picks, 3);
+  assert.equal(nine.sections.activities.picks, 9);
+  assert.equal(nine.sections.activities.backups, 4);
+  // City facts, not per-night choices, so these do NOT scale.
+  assert.equal(nine.sections.services.picks, three.sections.services.picks);
+  assert.equal(nine.total, 49);
+  assert.equal(three.total, 37);
+});
+
+test('the prompt PRINTS the computed counts instead of a fixed total', () => {
+  const out = C.promptKit.buildResearchAllPrompt(FAKE_RERUN, NINE_DAY, PROFILE);
+  assert.ok(/## How many/.test(out), 'no counts block in the prompt');
+  assert.ok(/This stay is 9 days long/.test(out), out.slice(out.indexOf('## How many'), 200));
+  assert.ok(/`dinner`: 9 picks, one for each evening/.test(out));
+  assert.ok(/`activities`: 9 picks, one anchor for each day/.test(out));
+  // And it must not carry a fixed number any more, which is what capped a long
+  // stay at a short stay's worth of places.
+  assert.equal(/10 to 18/.test(out), false, 'the fixed total is still in the prompt');
+
+  const short = C.promptKit.buildResearchAllPrompt(FAKE_RERUN, THREE_DAY, PROFILE);
+  assert.ok(/This stay is 3 days long/.test(short));
+  assert.ok(/`dinner`: 3 picks/.test(short));
+});
+
+test('a longer stay is generated in more sittings, not bigger ones', () => {
+  assert.equal(C.promptKit.stages(THREE_DAY).length, 3);
+  const nine = C.promptKit.stages(NINE_DAY);
+  assert.equal(nine.length, 5);
+  // Dinner gets a sitting of its own once there are more evenings than one
+  // answer can comfortably cover alongside breakfast, lunch and coffee.
+  assert.deepEqual(nine[0].sections, ['dinner']);
+  assert.deepEqual(nine[1].sections, ['breakfast', 'lunch', 'coffee']);
+  // Five days: eat splits, do does not.
+  assert.equal(C.promptKit.stages(cityOfDays('2026-09-20', '2026-09-24')).length, 4);
+});
+
+test('no stage ever asks for more than one answer can hold', () => {
+  // The 7000-token release failed because a stage asked for more than it could
+  // say and ran out mid-JSON. Budget is ~350 output tokens an item, measured
+  // from the 2026-09-14 runs.
+  const room = Math.floor(C.promptKit.STAGE_MAX_TOKENS / C.promptKit.TOKENS_PER_ITEM);
+  [THREE_DAY, NINE_DAY, cityOfDays('2026-09-01', '2026-09-30')].forEach(function (city) {
+    C.promptKit.stages(city).forEach(function (st) {
+      const c = C.promptKit.coverageLines(city, st.sections, C.promptKit.STAGE_MAX_TOKENS);
+      assert.ok(c.items <= room,
+        'stage ' + st.id + ' asks for ' + c.items + ' items, over the ' + room + ' that fit');
+      assert.ok(c.items > 0, 'stage ' + st.id + ' asks for nothing');
+    });
+  });
+  // A 30-day stay wants more dinners than fit, so it must SCALE DOWN and say
+  // so, rather than ask for a number that truncates.
+  const long = C.promptKit.coverageLines(cityOfDays('2026-09-01', '2026-09-30'),
+    ['dinner'], C.promptKit.STAGE_MAX_TOKENS);
+  assert.equal(long.scaled, true, 'a 30-day dinner stage did not scale to fit');
+});
+
+test('the merge reports which section it filled, not just how many', () => {
+  const delta = { schema: 1, delta: true, items: [
+    { id: 'd1', section: 'dinner', status: 'plan', name: 'One', links: [] },
+    { id: 'd2', section: 'dinner', status: 'plan', name: 'Two', links: [] },
+    { id: 'c1', section: 'coffee', status: 'plan', name: 'Three', links: [] }
+  ] };
+  const res = C.mergeDelta(GOOD, delta);
+  assert.ok(res.data, (res.errors || []).join('; '));
+  assert.deepEqual(res.summary.addedBySection, { dinner: 2, coffee: 1 });
+  // "3 added" after a Dinner re-run is true and useless.
+  assert.equal(res.summary.added, 3);
+});
+
 test('the generation stages cover every core section exactly once', () => {
   const stages = C.promptKit.stages();
   assert.ok(stages.length >= 2, 'one stage is not staging');
@@ -1888,7 +1992,7 @@ test('the real PROMPT.md carries every landmark the builders slice', () => {
   assert.ok(interests.includes('- brasserie | dinner | Brasserie 1900'));
   const research = C.promptKit.buildResearchAllPrompt(prompt, GOOD, PROFILE);
   assert.ok(research.includes('Cover each of these categories that makes sense for this city'));
-  assert.ok(research.includes('Return 10 to 18 new items in total'));
+  assert.ok(research.includes('Return exactly the counts given under "How many" above'));
   assert.ok(research.includes('- brasserie | dinner | Brasserie 1900'));
   const intel = C.promptKit.buildIntelPassPrompt(prompt, GOOD);
   assert.ok(intel.includes('Follow the Intel quality rules above exactly'));
@@ -2971,7 +3075,7 @@ test('mergeDelta ratings map is prototype-safe and rejects bad shapes', () => {
   assert.equal(badEntry.data, null);
   assert.ok(badEntry.errors.some((e) => /ratings\["nord"\]: stars must be a number from 0 to 5/.test(e)));
   // Errors mean NO merge at all, ratings included.
-  assert.deepEqual(badEntry.summary, { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0,
+  assert.deepEqual(badEntry.summary, { added: 0, addedBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0,
     intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 
@@ -6440,9 +6544,7 @@ function loadRunStagedGenerate(deps) {
     deps.loadApiKey || function () { return 'k'; },
     C,
     deps.aiTransportNow || function () { return 'proxy'; },
-    deps.formHeader || function () {
-      return { name: 'Ohrid', country: 'MK', from: '2026-09-09', to: '2026-09-16' };
-    },
+    deps.formHeader || function () { return PROBE_HEADER; },
     deps.store || { profile: {} },
     deps.genMsg, deps.callClaudeStream,
     function () { return { mode: 'delta' }; },
@@ -6450,6 +6552,13 @@ function loadRunStagedGenerate(deps) {
     deps.setGenerating || function () {},
     deps.showRetry, deps.offerDownload || function () {},
     deps.commitFromForm, deps.AbortController || undefined);
+}
+
+// The stay the staged-runner tests generate. Eight days, so it exercises the
+// long-stay split (five stages) rather than the short-stay default.
+const PROBE_HEADER = { name: 'Ohrid', country: 'MK', from: '2026-09-09', to: '2026-09-16' };
+function probeStages() {
+  return C.promptKit.stages({ city: { dates: { from: PROBE_HEADER.from, to: PROBE_HEADER.to } } });
 }
 
 function stageReply(section, id) {
@@ -6464,7 +6573,7 @@ function stageReply(section, id) {
 asyncTest('a stage that fails does not throw away the stages that landed', () => {
   // THE whole point of staging. Before this, a failure at 399 seconds left the
   // traveler with nothing at all after a four-minute wait.
-  const stages = C.promptKit.stages();
+  const stages = probeStages();
   let n = 0;
   let committed = null;
   let retryMsg = '';
@@ -6482,7 +6591,7 @@ asyncTest('a stage that fails does not throw away the stages that landed', () =>
     assert.ok(committed, 'the stage that landed was not saved');
     assert.equal(committed.items.length, 1);
     assert.equal(committed.items[0].id, 'first');
-    assert.ok(/1 of 3 stages were saved/.test(retryMsg), retryMsg);
+    assert.ok(new RegExp('1 of ' + stages.length + ' stages were saved').test(retryMsg), retryMsg);
     // And it must say the work survived, not just that something broke.
     assert.ok(/nothing so far is lost/.test(retryMsg), retryMsg);
   });
@@ -6500,7 +6609,7 @@ asyncTest('every stage asks for a stage-sized answer, not a whole-guide one', ()
     showRetry: function () {}
   });
   return run(FAKE_RERUN, 'Ohrid').then(function () {
-    assert.equal(asked.length, C.promptKit.stages().length);
+    assert.equal(asked.length, probeStages().length);
     asked.forEach(function (o) {
       assert.equal(o && o.maxTokens, C.promptKit.STAGE_MAX_TOKENS,
         'a stage asked for ' + (o && o.maxTokens) + ' tokens');
@@ -6520,7 +6629,7 @@ asyncTest('a later stage is told what the earlier ones already produced', () => 
     genMsg: { textContent: '' },
     callClaudeStream: function (prompt) {
       prompts.push(prompt);
-      return Promise.resolve(stageReply(C.promptKit.stages()[prompts.length - 1].sections[0],
+      return Promise.resolve(stageReply(probeStages()[prompts.length - 1].sections[0],
         'item' + prompts.length));
     },
     commitFromForm: function () {},
