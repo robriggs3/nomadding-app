@@ -1080,8 +1080,11 @@ var CityOps = (function () {
   var DELTA_STATUS_HINT = ' (a delta may only add plan or backup items)';
 
   function emptyDeltaSummary() {
+    // addedBySection lets a section-only paste say WHICH section it filled.
+    // "9 added" after a Dinner re-run is true and useless; "added 9 dinner
+    // picks" is what tells a traveler the thing they asked for arrived.
     return { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0,
-      ratingsApplied: 0, ratingsSkipped: 0 };
+      ratingsApplied: 0, ratingsSkipped: 0, addedBySection: {}, addedStatusBySection: {} };
   }
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -1277,6 +1280,14 @@ var CityOps = (function () {
       if (copy.verified === undefined) copy.verified = null;
       out.items.push(copy);
       summary.added++;
+      if (copy.section) {
+        summary.addedBySection[copy.section] = (summary.addedBySection[copy.section] || 0) + 1;
+        var slot = summary.addedStatusBySection[copy.section] ||
+          (summary.addedStatusBySection[copy.section] = { dated: 0, plan: 0, backup: 0 });
+        if (copy.status === 'backup') slot.backup++;
+        else if (copy.day) slot.dated++;
+        else slot.plan++;
+      }
     });
 
     // One id map for both passes. Object.create(null) plus an own-property
@@ -3460,6 +3471,10 @@ var CityOps = (function () {
     out = out.concat(cityHeaderLines(cityData));
     if (!profileIsEmpty(p)) out = out.concat(interestsBlockLines(p, null));
     out.push('## What I need', '', rerun, '');
+    // The counts, computed from the stay, in place of the fixed total the
+    // template used to carry. Without this a nine-night city gets the same
+    // handful as a three-night one, which is exactly what happened to Rob.
+    out.push(coverageBlock(cityData, null, null), '');
     out.push('## Existing items (do not re-suggest these)', '');
     out = out.concat(itemListLines(cityData && cityData.items));
     out.push('');
@@ -3490,20 +3505,96 @@ var CityOps = (function () {
   //     something the traveler can hit at all.
   //   - the traveler is told which stage is running, because four silent
   //     minutes is what made this feel broken even on the days it worked.
-  var GENERATION_STAGES = [
-    { id: 'eat', label: 'Eat and drink',
-      sections: ['dinner', 'breakfast', 'lunch', 'coffee'] },
-    { id: 'do', label: 'Things to do',
-      sections: ['activities', 'cowork'] },
-    { id: 'life', label: 'Services and practical',
-      sections: ['services', 'practical'] }
-  ];
+  // ---- how many of each thing a stay actually needs ----
+  //
+  // Rob's 9-day city came back with THREE places to eat. Nothing was broken:
+  // PROMPT.md asked for "10 to 18 new items in total, spread across the
+  // categories", and the eat stage then split its share four ways across
+  // dinner, breakfast, lunch and coffee. A fixed total cannot serve a 3-night
+  // stay and a 9-night stay, and three dinners for nine evenings is that
+  // arithmetic working exactly as written.
+  //
+  // So the counts are computed from the stay and PRINTED in the prompt. The
+  // split is between things a traveler chooses per day and things they look up
+  // once: dinner and activities scale with the nights, because there is one
+  // evening and one anchor to fill per day; a SIM shop, a laundry and an
+  // airport run are facts about the CITY, and padding them with the stay
+  // length would pad the guide rather than fill it.
+  var COVERAGE_FIXED = { cowork: 2, services: 5, practical: 6 };
 
-  function generationStages() {
-    // Copied out, so a caller cannot reorder the shipped list by accident.
-    return GENERATION_STAGES.map(function (s) {
-      return { id: s.id, label: s.label, sections: s.sections.slice() };
+  function stayLengthDays(cityData) {
+    var dates = cityData && cityData.city && cityData.city.dates;
+    if (!dates || !dates.from || !dates.to) return 1;
+    var n = stayDates(dates).length;
+    return n > 0 ? n : 1;
+  }
+
+  // Returns {days, sections: {id: {picks, backups, total}}, total}.
+  function coverageTargets(cityData) {
+    var days = stayLengthDays(cityData);
+    var daytime = Math.max(3, Math.ceil(days / 3));
+    var sections = {
+      // One dated pick per evening, plus somewhere to fall back to when a
+      // place is shut, full, or simply wrong on the night.
+      dinner: { picks: days, backups: Math.max(5, Math.ceil(days / 2)) },
+      breakfast: { picks: daytime, backups: 0 },
+      lunch: { picks: daytime, backups: 0 },
+      coffee: { picks: daytime, backups: 0 },
+      // One anchor per day, and four spares for weather and closures.
+      activities: { picks: days, backups: 4 }
+    };
+    Object.keys(COVERAGE_FIXED).forEach(function (id) {
+      sections[id] = { picks: COVERAGE_FIXED[id], backups: 0 };
     });
+    var total = 0;
+    Object.keys(sections).forEach(function (id) {
+      sections[id].total = sections[id].picks + sections[id].backups;
+      total += sections[id].total;
+    });
+    return { days: days, sections: sections, total: total };
+  }
+
+  // What one item costs to write, near enough to budget a stage with. Measured
+  // from the 2026-09-14 runs: three stages returned 6,315, 6,645 and 6,155
+  // output tokens for 16, 17 and 16 items, so a little under 400 each. 350 is
+  // the working figure with the margin left in on purpose.
+  var TOKENS_PER_ITEM = 350;
+
+  // The stage list for a given stay. A longer stay does not just ask for more,
+  // it asks in more sittings, because one stage has to fit in one answer.
+  //
+  // days > 4  : eat splits into dinner and daytime
+  // days > 6  : do splits into activities and cowork+practical, and services
+  //             stands on its own
+  // Every core section appears exactly once at every length, which is what the
+  // coverage test pins: a section owned by no stage is never generated, and
+  // nothing says so.
+  function generationStages(cityData) {
+    var days = cityData ? stayLengthDays(cityData) : 1;
+    if (days > 6) {
+      return [
+        { id: 'dinner', label: 'Dinner', sections: ['dinner'] },
+        { id: 'daytime', label: 'Breakfast, lunch and coffee',
+          sections: ['breakfast', 'lunch', 'coffee'] },
+        { id: 'activities', label: 'Things to do', sections: ['activities'] },
+        { id: 'work', label: 'Cowork and practical', sections: ['cowork', 'practical'] },
+        { id: 'services', label: 'Services', sections: ['services'] }
+      ];
+    }
+    if (days > 4) {
+      return [
+        { id: 'dinner', label: 'Dinner', sections: ['dinner'] },
+        { id: 'daytime', label: 'Breakfast, lunch and coffee',
+          sections: ['breakfast', 'lunch', 'coffee'] },
+        { id: 'do', label: 'Things to do', sections: ['activities', 'cowork'] },
+        { id: 'life', label: 'Services and practical', sections: ['services', 'practical'] }
+      ];
+    }
+    return [
+      { id: 'eat', label: 'Eat and drink', sections: ['dinner', 'breakfast', 'lunch', 'coffee'] },
+      { id: 'do', label: 'Things to do', sections: ['activities', 'cowork'] },
+      { id: 'life', label: 'Services and practical', sections: ['services', 'practical'] }
+    ];
   }
 
   // Per stage. This was 7000 for one release, chosen to sit under ai_reserve's
@@ -3535,6 +3626,66 @@ var CityOps = (function () {
   // nothing and competes with the answer for the same tokens.
   var STAGE_THINKING = { type: 'disabled' };
 
+  // The counts a prompt prints, for one set of sections, already scaled to fit
+  // whatever budget the caller has. Returns {lines, items, scaled}.
+  //
+  // Scaling down rather than truncating is the whole point. A stage that asks
+  // for more than it can say runs out mid-JSON and the traveler gets nothing,
+  // which is exactly how the 7000-token release failed. A stage that asks for
+  // fewer, honestly, returns a shorter guide that actually parses.
+  function coverageLines(cityData, sectionIds, maxTokens) {
+    var t = coverageTargets(cityData);
+    var ids = (sectionIds && sectionIds.length) ? sectionIds : Object.keys(t.sections);
+    var wanted = 0;
+    ids.forEach(function (id) { if (t.sections[id]) wanted += t.sections[id].total; });
+    var room = maxTokens ? Math.floor(maxTokens / TOKENS_PER_ITEM) : wanted;
+    var scale = (wanted > room && wanted > 0) ? (room / wanted) : 1;
+    var lines = [];
+    var items = 0;
+    ids.forEach(function (id) {
+      var c = t.sections[id];
+      if (!c) return;
+      var picks = Math.max(1, Math.floor(c.picks * scale));
+      var backups = Math.floor(c.backups * scale);
+      items += picks + backups;
+      var line = '- `' + id + '`: ' + picks + ' ' + (picks === 1 ? 'pick' : 'picks');
+      // Measured 2026-09-16: the model dated all nine activities and left all
+      // nine dinners undated, from the same wording. "One for each evening" is
+      // read as a quantity unless the `day` field is named, and an undated
+      // dinner list is nine restaurants somewhere in the week rather than a
+      // plan, which is most of what the traveler was asking for.
+      if (id === 'dinner') {
+        line += ', one for each evening of the stay, each carrying the `day` ' +
+          'it belongs to (' + picks + ' different dates, no two the same)';
+      }
+      if (id === 'activities') {
+        line += ', one anchor for each day, each carrying its `day`';
+      }
+      if (backups) line += ', plus ' + backups + ' backups marked `"status": "backup"`';
+      lines.push(line);
+    });
+    return { lines: lines, items: items, scaled: scale < 1, days: t.days };
+  }
+
+  // The block every generated prompt carries instead of a fixed total.
+  function coverageBlock(cityData, sectionIds, maxTokens) {
+    var c = coverageLines(cityData, sectionIds, maxTokens);
+    var out = ['## How many', '',
+      'This stay is ' + c.days + (c.days === 1 ? ' day' : ' days') + ' long, so it needs:', ''];
+    out = out.concat(c.lines);
+    out.push('');
+    out.push('Those numbers are the target, not a ceiling to stop short of. ' +
+      'Return ' + c.items + ' items in total for the sections listed. A guide with ' +
+      'fewer dinners than evenings is the one failure a traveler notices on day one.');
+    if (c.scaled) {
+      out.push('');
+      out.push('(These counts are trimmed to what one answer can hold. Run the pass ' +
+        'again afterwards for more: the guide lists what it already has, so a ' +
+        'second pass adds rather than repeats.)');
+    }
+    return out.join('\n');
+  }
+
   // One stage's prompt: the research pass, narrowed to this stage's sections.
   //
   // It reuses buildResearchAllPrompt wholesale rather than growing a second
@@ -3549,6 +3700,8 @@ var CityOps = (function () {
     var base = buildResearchAllPrompt(templateText, cityData, profile);
     var narrowing = [
       '',
+      coverageBlock(cityData, ids, STAGE_MAX_TOKENS),
+      '',
       '## This pass covers ONE part of the guide',
       '',
       'Return items for these sections ONLY: ' + ids.join(', ') + '.',
@@ -3559,6 +3712,193 @@ var CityOps = (function () {
         'the only pass that will fill them.'
     ];
     return base + '\n' + narrowing.join('\n');
+  }
+
+  // ---- "What is this?": the traveler says what they are pasting ----
+  //
+  // Rob, mid-trip 2026-09-16: the paste box has to let him SAY what he is
+  // loading. Detection alone is a guess made at the worst moment, when a chat
+  // has already trimmed the reply and the guide is about to be written. When
+  // he says "this is dinner", a coffee place in the payload is not a helpful
+  // bonus, it is a sign the reply drifted, and he should be told rather than
+  // have it filed quietly.
+  //
+  // `sections: null` means "anything", which is what a whole guide and the
+  // detect option both need.
+  var PASTE_SCOPES = [
+    { id: 'dinner', label: 'Dinner', sections: ['dinner'] },
+    { id: 'daytime', label: 'Daytime: breakfast, lunch, coffee',
+      sections: ['breakfast', 'lunch', 'coffee'] },
+    { id: 'activities', label: 'Activities', sections: ['activities'] },
+    { id: 'services', label: 'Services and practical', sections: ['services', 'practical'] },
+    { id: 'guide', label: 'Whole guide', sections: null },
+    { id: 'detect', label: 'Let Nomadding detect', sections: null }
+  ];
+
+  function pasteScopes() {
+    return PASTE_SCOPES.map(function (s) {
+      return { id: s.id, label: s.label, sections: s.sections ? s.sections.slice() : null };
+    });
+  }
+
+  function pasteScope(id) {
+    var found = null;
+    PASTE_SCOPES.forEach(function (s) { if (s.id === id) found = s; });
+    return found;
+  }
+
+  // Which scope a payload looks like, for "Let Nomadding detect". A scope wins
+  // only if it holds EVERY item: a payload spanning dinner and activities is a
+  // whole guide, not a dinner pass that leaked.
+  function detectPasteScope(delta) {
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    if (!items.length) return 'guide';
+    var seen = {};
+    items.forEach(function (it) { if (it && it.section) seen[it.section] = 1; });
+    var ids = Object.keys(seen);
+    var hit = 'guide';
+    PASTE_SCOPES.forEach(function (sc) {
+      if (!sc.sections || hit !== 'guide') return;
+      var all = ids.every(function (id) { return sc.sections.indexOf(id) !== -1; });
+      if (all) hit = sc.id;
+    });
+    return hit;
+  }
+
+  // The items that do not belong to what the traveler said they were pasting.
+  // Returned rather than dropped, because "silently dropped" is how a guide
+  // quietly loses half a reply.
+  function pasteOutOfScope(delta, scopeId) {
+    var sc = pasteScope(scopeId);
+    var wanted = sc && sc.sections;
+    if (!wanted) return [];
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    return items.filter(function (it) {
+      return it && wanted.indexOf(it.section) === -1;
+    }).map(function (it) {
+      return { id: it.id, name: it.name || it.id, section: it.section || 'no section' };
+    });
+  }
+
+  // "Dinner: added 9 dated picks and 6 backups."
+  //
+  // A dated pick is one the model tied to a specific evening, which is the
+  // thing a traveler is really asking for when they re-run dinner on a nine
+  // night stay. Counting it separately from an undated pick is the difference
+  // between "nine dinners" and "nine restaurants somewhere in the week".
+  function pasteResultText(scopeId, summary, verb) {
+    var sc = pasteScope(scopeId);
+    var by = (summary && summary.addedStatusBySection) || {};
+    var ids = sc && sc.sections ? sc.sections : Object.keys(by);
+    var dated = 0, plan = 0, backup = 0;
+    ids.forEach(function (id) {
+      var c = by[id];
+      if (!c) return;
+      dated += c.dated || 0; plan += c.plan || 0; backup += c.backup || 0;
+    });
+    var bits = [];
+    if (dated) bits.push(dated + ' dated pick' + (dated === 1 ? '' : 's'));
+    if (plan) bits.push(plan + ' pick' + (plan === 1 ? '' : 's'));
+    if (backup) bits.push(backup + ' backup' + (backup === 1 ? '' : 's'));
+    var head = (sc && sc.id !== 'guide' && sc.id !== 'detect') ? sc.label + ': ' : '';
+    if (!bits.length) return head + (verb || 'added') + ' nothing new';
+    var tail = bits.length > 1
+      ? bits.slice(0, -1).join(', ') + ' and ' + bits[bits.length - 1]
+      : bits[0];
+    return head + (verb || 'added') + ' ' + tail;
+  }
+
+  // What the app says about items that did not match the choice.
+  function pasteOutOfScopeText(out) {
+    if (!out || !out.length) return '';
+    var named = out.slice(0, 4).map(function (o) { return o.name + ' (' + o.section + ')'; }).join(', ');
+    var more = out.length > 4 ? ', and ' + (out.length - 4) + ' more' : '';
+    return out.length + (out.length === 1 ? ' item was' : ' items were') +
+      ' not what you said this is, so ' + (out.length === 1 ? 'it was' : 'they were') +
+      ' left out: ' + named + more +
+      '. Change "What is this?" to Whole guide and press Apply again to keep ' +
+      (out.length === 1 ? 'it' : 'them') + '.';
+  }
+
+  // ---- too big to load in one go, said out loud ----
+  //
+  // Rob, 2026-09-16: this is a commercial product, so when something is too
+  // big to process the traveler is TOLD. Silently trimming a paste is the
+  // worst of the options: the guide looks like it worked and half the answer
+  // is gone, and nobody finds out until they are standing outside a restaurant
+  // that was never saved.
+  //
+  // The ceiling is not a storage limit, it is a reliability one. A paste this
+  // size is almost always a whole-guide answer that a chat has already cut
+  // off, so loading it whole is how a half-answer gets in. One section at a
+  // time is both smaller and checkable.
+  var PASTE_MAX_ITEMS = 60;
+  var PASTE_MAX_CHARS = 120000;
+
+  // Returns {tooBig, items, chars, message, next}. `next` is the scope to
+  // start with, so the app can offer one button rather than an instruction.
+  function pasteTooBig(delta, text) {
+    var items = (delta && Array.isArray(delta.items)) ? delta.items.length : 0;
+    var chars = text ? String(text).length : 0;
+    var tooBig = items > PASTE_MAX_ITEMS || chars > PASTE_MAX_CHARS;
+    if (!tooBig) return { tooBig: false, items: items, chars: chars, message: '', next: '' };
+    return {
+      tooBig: true, items: items, chars: chars, next: 'dinner',
+      message: 'That is more than Nomadding can load in one go (' + items +
+        ' places). Load it in sections: Dinner first, then Daytime, then ' +
+        'Activities, then Services. Your text stays in the box.'
+    };
+  }
+
+  // ---- a section that came back short ----
+  //
+  // A chat answer that stops early does not announce itself: the JSON parses,
+  // the items are real, there are simply fewer than the stay needs. Comparing
+  // what arrived against the computed counts is the only way to notice, and
+  // noticing is the difference between a guide with four dinners for nine
+  // evenings and a traveler who knows to run it again.
+  //
+  // Returns [{section, expected, got, label}], worst first. Empty means the
+  // answer covered what it was asked for.
+  function coverageShortfall(cityData, delta, sectionIds) {
+    var t = coverageTargets(cityData);
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    var ids = (sectionIds && sectionIds.length) ? sectionIds : Object.keys(t.sections);
+    var got = {};
+    items.forEach(function (it) {
+      if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
+    });
+    var out = [];
+    ids.forEach(function (id) {
+      var want = t.sections[id];
+      if (!want) return;
+      var have = got[id] || 0;
+      // Half is the line: a pass that returns most of what was asked for is a
+      // model making a judgement call, and nagging about it would train people
+      // to ignore the message. Half is an answer that stopped.
+      if (have < Math.ceil(want.total / 2)) {
+        out.push({ section: id, expected: want.total, got: have, picks: want.picks });
+      }
+    });
+    out.sort(function (a, b) { return (a.got - a.expected) - (b.got - b.expected); });
+    return out;
+  }
+
+  var SHORTFALL_UNIT = { dinner: 'evenings', activities: 'days' };
+
+  function shortfallText(short, days) {
+    if (!short || !short.length) return '';
+    var w = short[0];
+    var unit = SHORTFALL_UNIT[w.section];
+    var head = w.section.charAt(0).toUpperCase() + w.section.slice(1) +
+      ' came up short: ' + w.got + (w.got === 1 ? ' place' : ' places') +
+      (unit ? ' for ' + (days || w.picks) + ' ' + unit : ' where this stay needs ' + w.expected) + '.';
+    var more = short.length > 1
+      ? ' ' + (short.length - 1) + ' other ' + (short.length === 2 ? 'section' : 'sections') +
+        ' came up short too (' + short.slice(1).map(function (x) { return x.section; }).join(', ') + ').'
+      : '';
+    return head + more + ' The answer was probably cut off before it finished. ' +
+      'Copy that section\'s prompt and run it again: what is already here is kept.';
   }
 
   // Make the prompt's promise true.
@@ -7004,7 +7344,10 @@ var CityOps = (function () {
   var AI_GUIDE_OUTPUT_TOKENS = 29000;
   var AI_MAX_TOKENS = 32000;
   var AI_LARGE_CALL_MIN_TOKENS = 8000;
-  var AI_LARGE_CALLS_PER_HOUR = 5;
+  // Kept in step with the proxy's own constant, which is the one that decides.
+  // Raised from 5 on 2026-09-16: staged generation made one guide up to FIVE
+  // large calls, so five an hour had quietly become one guide an hour.
+  var AI_LARGE_CALLS_PER_HOUR = 25;
   // The tiers whose AI runs on our key. `managed` is the tier that is sold;
   // `complimentary` is a row only the owner writes, and the proxy decides for
   // itself whether to honour it (see AI_PROXY_TIERS). The app offering the
@@ -10149,6 +10492,15 @@ var CityOps = (function () {
       // call that outlives the edge function's wall clock.
       stages: generationStages, buildStagePrompt: buildStagePrompt,
       keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
+      coverageTargets: coverageTargets, coverageBlock: coverageBlock,
+      // What the traveler says they are pasting, and what follows from it.
+      pasteScopes: pasteScopes, pasteScope: pasteScope, detectPasteScope: detectPasteScope,
+      pasteOutOfScope: pasteOutOfScope, pasteResultText: pasteResultText,
+      pasteOutOfScopeText: pasteOutOfScopeText,
+      // Too big to load, and came back short: both said out loud.
+      pasteTooBig: pasteTooBig, PASTE_MAX_ITEMS: PASTE_MAX_ITEMS,
+      coverageShortfall: coverageShortfall, shortfallText: shortfallText,
+      coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
       STAGE_THINKING: STAGE_THINKING,
       buildIntelPassPrompt: buildIntelPassPrompt,
       buildRatingsPassPrompt: buildRatingsPassPrompt,
