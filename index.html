@@ -4034,12 +4034,26 @@ var CityOps = (function () {
   // answer covered what it was asked for.
   function coverageShortfall(cityData, delta, sectionIds) {
     var t = coverageTargets(cityData);
-    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
     var ids = (sectionIds && sectionIds.length) ? sectionIds : Object.keys(t.sections);
     var got = {};
-    items.forEach(function (it) {
-      if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
-    });
+    // COUNT THE GUIDE AS IT WILL BE, not the delta on its own.
+    //
+    // Found on the live site 2026-09-16: pasting two extra dinners into a guide
+    // that already held fourteen said "Dinner came up short: 2 places for 9
+    // evenings. The answer was probably cut off." Both halves were false. A
+    // delta is a TOP-UP, and measuring a top-up against the whole stay makes
+    // every normal paste look like a failure; the "Let Nomadding detect" case
+    // went further and reported seven sections short on a full guide.
+    //
+    // The question the warning exists to answer is "does this guide still have
+    // fewer dinners than evenings", and that can only be asked of the merged
+    // total. An empty city that gets a short paste still warns, which is the
+    // case it was written for.
+    var existing = (cityData && Array.isArray(cityData.items)) ? cityData.items : [];
+    existing.concat((delta && Array.isArray(delta.items)) ? delta.items : [])
+      .forEach(function (it) {
+        if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
+      });
     var out = [];
     ids.forEach(function (id) {
       var want = t.sections[id];
@@ -14718,12 +14732,26 @@ var CityOps = (function () {
   // answer covered what it was asked for.
   function coverageShortfall(cityData, delta, sectionIds) {
     var t = coverageTargets(cityData);
-    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
     var ids = (sectionIds && sectionIds.length) ? sectionIds : Object.keys(t.sections);
     var got = {};
-    items.forEach(function (it) {
-      if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
-    });
+    // COUNT THE GUIDE AS IT WILL BE, not the delta on its own.
+    //
+    // Found on the live site 2026-09-16: pasting two extra dinners into a guide
+    // that already held fourteen said "Dinner came up short: 2 places for 9
+    // evenings. The answer was probably cut off." Both halves were false. A
+    // delta is a TOP-UP, and measuring a top-up against the whole stay makes
+    // every normal paste look like a failure; the "Let Nomadding detect" case
+    // went further and reported seven sections short on a full guide.
+    //
+    // The question the warning exists to answer is "does this guide still have
+    // fewer dinners than evenings", and that can only be asked of the merged
+    // total. An empty city that gets a short paste still warns, which is the
+    // case it was written for.
+    var existing = (cityData && Array.isArray(cityData.items)) ? cityData.items : [];
+    existing.concat((delta && Array.isArray(delta.items)) ? delta.items : [])
+      .forEach(function (it) {
+        if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
+      });
     var out = [];
     ids.forEach(function (id) {
       var want = t.sections[id];
