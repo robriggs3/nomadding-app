@@ -204,7 +204,7 @@ var CityOps = (function () {
     // "9 added" after a Dinner re-run is true and useless; "added 9 dinner
     // picks" is what tells a traveler the thing they asked for arrived.
     return { added: 0, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0,
-      ratingsApplied: 0, ratingsSkipped: 0, addedBySection: {} };
+      ratingsApplied: 0, ratingsSkipped: 0, addedBySection: {}, addedStatusBySection: {} };
   }
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -402,6 +402,11 @@ var CityOps = (function () {
       summary.added++;
       if (copy.section) {
         summary.addedBySection[copy.section] = (summary.addedBySection[copy.section] || 0) + 1;
+        var slot = summary.addedStatusBySection[copy.section] ||
+          (summary.addedStatusBySection[copy.section] = { dated: 0, plan: 0, backup: 0 });
+        if (copy.status === 'backup') slot.backup++;
+        else if (copy.day) slot.dated++;
+        else slot.plan++;
       }
     });
 
@@ -2817,6 +2822,193 @@ var CityOps = (function () {
         'the only pass that will fill them.'
     ];
     return base + '\n' + narrowing.join('\n');
+  }
+
+  // ---- "What is this?": the traveler says what they are pasting ----
+  //
+  // Rob, mid-trip 2026-09-16: the paste box has to let him SAY what he is
+  // loading. Detection alone is a guess made at the worst moment, when a chat
+  // has already trimmed the reply and the guide is about to be written. When
+  // he says "this is dinner", a coffee place in the payload is not a helpful
+  // bonus, it is a sign the reply drifted, and he should be told rather than
+  // have it filed quietly.
+  //
+  // `sections: null` means "anything", which is what a whole guide and the
+  // detect option both need.
+  var PASTE_SCOPES = [
+    { id: 'dinner', label: 'Dinner', sections: ['dinner'] },
+    { id: 'daytime', label: 'Daytime: breakfast, lunch, coffee',
+      sections: ['breakfast', 'lunch', 'coffee'] },
+    { id: 'activities', label: 'Activities', sections: ['activities'] },
+    { id: 'services', label: 'Services and practical', sections: ['services', 'practical'] },
+    { id: 'guide', label: 'Whole guide', sections: null },
+    { id: 'detect', label: 'Let Nomadding detect', sections: null }
+  ];
+
+  function pasteScopes() {
+    return PASTE_SCOPES.map(function (s) {
+      return { id: s.id, label: s.label, sections: s.sections ? s.sections.slice() : null };
+    });
+  }
+
+  function pasteScope(id) {
+    var found = null;
+    PASTE_SCOPES.forEach(function (s) { if (s.id === id) found = s; });
+    return found;
+  }
+
+  // Which scope a payload looks like, for "Let Nomadding detect". A scope wins
+  // only if it holds EVERY item: a payload spanning dinner and activities is a
+  // whole guide, not a dinner pass that leaked.
+  function detectPasteScope(delta) {
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    if (!items.length) return 'guide';
+    var seen = {};
+    items.forEach(function (it) { if (it && it.section) seen[it.section] = 1; });
+    var ids = Object.keys(seen);
+    var hit = 'guide';
+    PASTE_SCOPES.forEach(function (sc) {
+      if (!sc.sections || hit !== 'guide') return;
+      var all = ids.every(function (id) { return sc.sections.indexOf(id) !== -1; });
+      if (all) hit = sc.id;
+    });
+    return hit;
+  }
+
+  // The items that do not belong to what the traveler said they were pasting.
+  // Returned rather than dropped, because "silently dropped" is how a guide
+  // quietly loses half a reply.
+  function pasteOutOfScope(delta, scopeId) {
+    var sc = pasteScope(scopeId);
+    var wanted = sc && sc.sections;
+    if (!wanted) return [];
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    return items.filter(function (it) {
+      return it && wanted.indexOf(it.section) === -1;
+    }).map(function (it) {
+      return { id: it.id, name: it.name || it.id, section: it.section || 'no section' };
+    });
+  }
+
+  // "Dinner: added 9 dated picks and 6 backups."
+  //
+  // A dated pick is one the model tied to a specific evening, which is the
+  // thing a traveler is really asking for when they re-run dinner on a nine
+  // night stay. Counting it separately from an undated pick is the difference
+  // between "nine dinners" and "nine restaurants somewhere in the week".
+  function pasteResultText(scopeId, summary, verb) {
+    var sc = pasteScope(scopeId);
+    var by = (summary && summary.addedStatusBySection) || {};
+    var ids = sc && sc.sections ? sc.sections : Object.keys(by);
+    var dated = 0, plan = 0, backup = 0;
+    ids.forEach(function (id) {
+      var c = by[id];
+      if (!c) return;
+      dated += c.dated || 0; plan += c.plan || 0; backup += c.backup || 0;
+    });
+    var bits = [];
+    if (dated) bits.push(dated + ' dated pick' + (dated === 1 ? '' : 's'));
+    if (plan) bits.push(plan + ' pick' + (plan === 1 ? '' : 's'));
+    if (backup) bits.push(backup + ' backup' + (backup === 1 ? '' : 's'));
+    var head = (sc && sc.id !== 'guide' && sc.id !== 'detect') ? sc.label + ': ' : '';
+    if (!bits.length) return head + (verb || 'added') + ' nothing new';
+    var tail = bits.length > 1
+      ? bits.slice(0, -1).join(', ') + ' and ' + bits[bits.length - 1]
+      : bits[0];
+    return head + (verb || 'added') + ' ' + tail;
+  }
+
+  // What the app says about items that did not match the choice.
+  function pasteOutOfScopeText(out) {
+    if (!out || !out.length) return '';
+    var named = out.slice(0, 4).map(function (o) { return o.name + ' (' + o.section + ')'; }).join(', ');
+    var more = out.length > 4 ? ', and ' + (out.length - 4) + ' more' : '';
+    return out.length + (out.length === 1 ? ' item was' : ' items were') +
+      ' not what you said this is, so ' + (out.length === 1 ? 'it was' : 'they were') +
+      ' left out: ' + named + more +
+      '. Change "What is this?" to Whole guide and press Apply again to keep ' +
+      (out.length === 1 ? 'it' : 'them') + '.';
+  }
+
+  // ---- too big to load in one go, said out loud ----
+  //
+  // Rob, 2026-09-16: this is a commercial product, so when something is too
+  // big to process the traveler is TOLD. Silently trimming a paste is the
+  // worst of the options: the guide looks like it worked and half the answer
+  // is gone, and nobody finds out until they are standing outside a restaurant
+  // that was never saved.
+  //
+  // The ceiling is not a storage limit, it is a reliability one. A paste this
+  // size is almost always a whole-guide answer that a chat has already cut
+  // off, so loading it whole is how a half-answer gets in. One section at a
+  // time is both smaller and checkable.
+  var PASTE_MAX_ITEMS = 60;
+  var PASTE_MAX_CHARS = 120000;
+
+  // Returns {tooBig, items, chars, message, next}. `next` is the scope to
+  // start with, so the app can offer one button rather than an instruction.
+  function pasteTooBig(delta, text) {
+    var items = (delta && Array.isArray(delta.items)) ? delta.items.length : 0;
+    var chars = text ? String(text).length : 0;
+    var tooBig = items > PASTE_MAX_ITEMS || chars > PASTE_MAX_CHARS;
+    if (!tooBig) return { tooBig: false, items: items, chars: chars, message: '', next: '' };
+    return {
+      tooBig: true, items: items, chars: chars, next: 'dinner',
+      message: 'That is more than Nomadding can load in one go (' + items +
+        ' places). Load it in sections: Dinner first, then Daytime, then ' +
+        'Activities, then Services. Your text stays in the box.'
+    };
+  }
+
+  // ---- a section that came back short ----
+  //
+  // A chat answer that stops early does not announce itself: the JSON parses,
+  // the items are real, there are simply fewer than the stay needs. Comparing
+  // what arrived against the computed counts is the only way to notice, and
+  // noticing is the difference between a guide with four dinners for nine
+  // evenings and a traveler who knows to run it again.
+  //
+  // Returns [{section, expected, got, label}], worst first. Empty means the
+  // answer covered what it was asked for.
+  function coverageShortfall(cityData, delta, sectionIds) {
+    var t = coverageTargets(cityData);
+    var items = (delta && Array.isArray(delta.items)) ? delta.items : [];
+    var ids = (sectionIds && sectionIds.length) ? sectionIds : Object.keys(t.sections);
+    var got = {};
+    items.forEach(function (it) {
+      if (it && it.section) got[it.section] = (got[it.section] || 0) + 1;
+    });
+    var out = [];
+    ids.forEach(function (id) {
+      var want = t.sections[id];
+      if (!want) return;
+      var have = got[id] || 0;
+      // Half is the line: a pass that returns most of what was asked for is a
+      // model making a judgement call, and nagging about it would train people
+      // to ignore the message. Half is an answer that stopped.
+      if (have < Math.ceil(want.total / 2)) {
+        out.push({ section: id, expected: want.total, got: have, picks: want.picks });
+      }
+    });
+    out.sort(function (a, b) { return (a.got - a.expected) - (b.got - b.expected); });
+    return out;
+  }
+
+  var SHORTFALL_UNIT = { dinner: 'evenings', activities: 'days' };
+
+  function shortfallText(short, days) {
+    if (!short || !short.length) return '';
+    var w = short[0];
+    var unit = SHORTFALL_UNIT[w.section];
+    var head = w.section.charAt(0).toUpperCase() + w.section.slice(1) +
+      ' came up short: ' + w.got + (w.got === 1 ? ' place' : ' places') +
+      (unit ? ' for ' + (days || w.picks) + ' ' + unit : ' where this stay needs ' + w.expected) + '.';
+    var more = short.length > 1
+      ? ' ' + (short.length - 1) + ' other ' + (short.length === 2 ? 'section' : 'sections') +
+        ' came up short too (' + short.slice(1).map(function (x) { return x.section; }).join(', ') + ').'
+      : '';
+    return head + more + ' The answer was probably cut off before it finished. ' +
+      'Copy that section\'s prompt and run it again: what is already here is kept.';
   }
 
   // Make the prompt's promise true.
@@ -9408,6 +9600,13 @@ var CityOps = (function () {
       stages: generationStages, buildStagePrompt: buildStagePrompt,
       keepStageItems: keepStageItems, STAGE_MAX_TOKENS: STAGE_MAX_TOKENS,
       coverageTargets: coverageTargets, coverageBlock: coverageBlock,
+      // What the traveler says they are pasting, and what follows from it.
+      pasteScopes: pasteScopes, pasteScope: pasteScope, detectPasteScope: detectPasteScope,
+      pasteOutOfScope: pasteOutOfScope, pasteResultText: pasteResultText,
+      pasteOutOfScopeText: pasteOutOfScopeText,
+      // Too big to load, and came back short: both said out loud.
+      pasteTooBig: pasteTooBig, PASTE_MAX_ITEMS: PASTE_MAX_ITEMS,
+      coverageShortfall: coverageShortfall, shortfallText: shortfallText,
       coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
       STAGE_THINKING: STAGE_THINKING,
       buildIntelPassPrompt: buildIntelPassPrompt,

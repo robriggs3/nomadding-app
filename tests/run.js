@@ -1387,7 +1387,8 @@ const DELTA = {
 test('mergeDelta adds new items and new sections and counts them', () => {
   const r = C.mergeDelta(GOOD, clone(DELTA));
   assert.deepEqual(r.errors, []);
-  assert.deepEqual(r.summary, { added: 2, addedBySection: { coffee: 1, interests: 1 }, skipped: 0, sectionsAdded: 1, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+  assert.deepEqual(r.summary, { added: 2, addedBySection: { coffee: 1, interests: 1 },
+    addedStatusBySection: { coffee: { dated: 0, plan: 0, backup: 1 }, interests: { dated: 0, plan: 1, backup: 0 } }, skipped: 0, sectionsAdded: 1, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.equal(r.data.sections.length, 3);
   assert.equal(r.data.sections[2].id, 'interests');   // appended, never reordered
   assert.equal(r.data.items.length, GOOD.items.length + 2);
@@ -1417,7 +1418,7 @@ test('mergeDelta applied twice is a no-op: everything is already there', () => {
   const second = C.mergeDelta(first.data, clone(DELTA));
   assert.deepEqual(second.errors, []);
   assert.deepEqual(second.summary,
-    { added: 0, addedBySection: {}, skipped: 2, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, addedBySection: {}, addedStatusBySection: {}, skipped: 2, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 1, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
   assert.deepEqual(second.data, first.data);
 });
 
@@ -1513,7 +1514,7 @@ test('mergeDelta rejects a bad envelope, unknown section, done status and bad in
   assert.equal(bad({ sections: 'nope' }).data, null);
   // A rejected delta reports a zeroed summary: nothing partial ever happened.
   assert.deepEqual(bad({ schema: 2 }).summary,
-    { added: 0, addedBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
+    { added: 0, addedBySection: {}, addedStatusBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0, intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 
 test('mergeDelta applies intel to existing ids and counts unknown ids as skipped', () => {
@@ -1813,6 +1814,84 @@ test('the merge reports which section it filled, not just how many', () => {
   assert.deepEqual(res.summary.addedBySection, { dinner: 2, coffee: 1 });
   // "3 added" after a Dinner re-run is true and useless.
   assert.equal(res.summary.added, 3);
+});
+
+test('a paste too big to load is refused in plain words, never trimmed', () => {
+  // ADDENDUM 2, Rob 2026-09-16: this is a commercial product, so when something
+  // is too big the traveler is TOLD. Silently trimming is the worst option:
+  // the guide looks like it worked and half the answer is gone.
+  const many = { schema: 1, delta: true, items: [] };
+  for (let i = 0; i < C.promptKit.PASTE_MAX_ITEMS + 5; i++) {
+    many.items.push({ id: 'i' + i, section: 'dinner', status: 'plan', name: 'P' + i, links: [] });
+  }
+  const big = C.promptKit.pasteTooBig(many, JSON.stringify(many));
+  assert.equal(big.tooBig, true);
+  assert.equal(big.items, C.promptKit.PASTE_MAX_ITEMS + 5);
+  assert.ok(/more than Nomadding can load in one go/.test(big.message), big.message);
+  // It has to name the number and the way out, and promise the text survives.
+  assert.ok(new RegExp('\\(' + big.items + ' places\\)').test(big.message), big.message);
+  assert.ok(/Dinner first, then Daytime/.test(big.message), big.message);
+  assert.ok(/text stays in the box/.test(big.message), big.message);
+  assert.equal(big.next, 'dinner');
+  // No jargon and no blame: this is copy a traveler reads on a phone.
+  ['token', 'payload', 'JSON', 'buffer', 'invalid', 'error', 'failed']
+    .forEach(function (w) {
+      assert.equal(big.message.indexOf(w), -1, 'jargon or blame in the message: ' + w);
+    });
+  // A normal paste says nothing at all.
+  const ok = { schema: 1, delta: true, items: [{ id: 'a', section: 'dinner', status: 'plan', name: 'A', links: [] }] };
+  assert.equal(C.promptKit.pasteTooBig(ok, JSON.stringify(ok)).tooBig, false);
+});
+
+test('a section that came back short says which one and how many were expected', () => {
+  // A chat answer that stops early does not announce itself: the JSON parses
+  // and the places are real, there are simply fewer than the stay needs.
+  const four = { schema: 1, delta: true, items: [] };
+  for (let i = 0; i < 4; i++) {
+    four.items.push({ id: 'd' + i, section: 'dinner', status: 'plan', name: 'D' + i, links: [] });
+  }
+  const short = C.promptKit.coverageShortfall(NINE_DAY, four, ['dinner']);
+  assert.equal(short.length, 1);
+  assert.equal(short[0].section, 'dinner');
+  assert.equal(short[0].got, 4);
+  assert.equal(short[0].expected, 14);
+  const text = C.promptKit.shortfallText(short, 9);
+  assert.ok(/Dinner came up short/.test(text), text);
+  assert.ok(/4 places for 9 evenings/.test(text), text);
+  assert.ok(/run it again/.test(text), text);
+  assert.ok(/what is already here is kept/.test(text), text);
+  // A pass that returns most of what was asked for is a judgement call, not a
+  // failure; nagging about it would train people to ignore the message.
+  const plenty = { schema: 1, delta: true, items: [] };
+  for (let i = 0; i < 12; i++) {
+    plenty.items.push({ id: 'p' + i, section: 'dinner', status: 'plan', name: 'P' + i, links: [] });
+  }
+  assert.deepEqual(C.promptKit.coverageShortfall(NINE_DAY, plenty, ['dinner']), []);
+});
+
+test('the traveler says what a paste is, and anything else is named not dropped', () => {
+  const mixed = { schema: 1, delta: true, items: [
+    { id: 'd1', section: 'dinner', status: 'plan', day: '2026-09-20', name: 'Kaneo', links: [] },
+    { id: 'd2', section: 'dinner', status: 'backup', name: 'Spare', links: [] },
+    { id: 'a1', section: 'activities', status: 'plan', name: 'Boat', links: [] }
+  ] };
+  const out = C.promptKit.pasteOutOfScope(mixed, 'dinner');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].name, 'Boat');
+  const note = C.promptKit.pasteOutOfScopeText(out);
+  assert.ok(/not what you said this is/.test(note), note);
+  assert.ok(/Boat \(activities\)/.test(note), note);
+  assert.ok(/left out/.test(note), note);
+  // Detection is available, but it only claims a scope that holds EVERY item.
+  assert.equal(C.promptKit.detectPasteScope(mixed), 'guide');
+  assert.equal(C.promptKit.detectPasteScope({ items: [mixed.items[0], mixed.items[1]] }), 'dinner');
+  // And the result line names the section and splits dated picks from backups.
+  const res = C.mergeDelta(GOOD, { schema: 1, delta: true, items: [mixed.items[0], mixed.items[1]] });
+  assert.ok(res.data, (res.errors || []).join('; '));
+  const line = C.promptKit.pasteResultText('dinner', res.summary, 'added');
+  assert.ok(/^Dinner: added /.test(line), line);
+  assert.ok(/1 dated pick/.test(line), line);
+  assert.ok(/1 backup/.test(line), line);
 });
 
 test('the generation stages cover every core section exactly once', () => {
@@ -3075,7 +3154,7 @@ test('mergeDelta ratings map is prototype-safe and rejects bad shapes', () => {
   assert.equal(badEntry.data, null);
   assert.ok(badEntry.errors.some((e) => /ratings\["nord"\]: stars must be a number from 0 to 5/.test(e)));
   // Errors mean NO merge at all, ratings included.
-  assert.deepEqual(badEntry.summary, { added: 0, addedBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0,
+  assert.deepEqual(badEntry.summary, { added: 0, addedBySection: {}, addedStatusBySection: {}, skipped: 0, sectionsAdded: 0, dayNotesAdded: 0, dayNotesSkipped: 0, intelApplied: 0,
     intelSkipped: 0, ratingsApplied: 0, ratingsSkipped: 0 });
 });
 
@@ -6639,6 +6718,63 @@ asyncTest('a later stage is told what the earlier ones already produced', () => 
     assert.equal(prompts[0].indexOf('item1'), -1, 'stage one already knew about its own output');
     assert.ok(prompts[1].indexOf('item1') !== -1, 'stage two was not told what stage one produced');
     assert.ok(prompts[2].indexOf('item2') !== -1, 'stage three was not told what stage two produced');
+  });
+});
+
+asyncTest('a stage that fails is named, with a retry, and nothing else is lost', () => {
+  // ADDENDUM 2 (c): a run that quietly skips a section is how a city ends up
+  // missing its dinners with no one the wiser.
+  const stages = probeStages();
+  let n = 0, committed = null, retryMsg = '', lastMsg = { textContent: '' };
+  const run = loadRunStagedGenerate({
+    genMsg: lastMsg,
+    callClaudeStream: function () {
+      n++;
+      // The SECOND stage comes back as prose, which the delta reader refuses.
+      if (n === 2) return Promise.resolve('Sorry, I could not find much for that.');
+      return Promise.resolve(stageReply(stages[n - 1].sections[0], 'ok' + n));
+    },
+    commitFromForm: function (d) { committed = d; },
+    showRetry: function (msg) { retryMsg = msg; }
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    // Everything else still landed and was saved.
+    assert.ok(committed, 'a failed stage threw away the whole run');
+    assert.equal(committed.items.length, stages.length - 1);
+    // The failing stage is named, in the traveler's words, with the way out.
+    assert.ok(retryMsg.indexOf(stages[1].label) !== -1,
+      'the failed stage was not named: ' + retryMsg);
+    assert.ok(/did not come back this time/.test(retryMsg), retryMsg);
+    assert.ok(/Everything else is saved/.test(retryMsg), retryMsg);
+    assert.ok(/run that section on its own/.test(retryMsg), retryMsg);
+    // No blame and no jargon on the surface a traveler reads.
+    ['JSON', 'parse', 'invalid', 'error', 'exception'].forEach(function (w) {
+      assert.equal(retryMsg.indexOf(w), -1, 'jargon in the failure copy: ' + w);
+    });
+  });
+});
+
+asyncTest('the progress line says what a stage is filling, in evenings and days', () => {
+  // "Stage 2 of 5" tells a traveler how long to wait. "Dinner, 8 evenings to
+  // fill, 5 backups" tells them what they are getting.
+  const seen = [];
+  const run = loadRunStagedGenerate({
+    genMsg: { set textContent(v) { seen.push(v); }, get textContent() { return seen[seen.length - 1] || ''; } },
+    callClaudeStream: function (prompt, key, onProgress) {
+      if (onProgress) onProgress({ kind: 'text', totalChars: 10 });
+      return Promise.resolve(stageReply('dinner', 'x' + seen.length));
+    },
+    commitFromForm: function () {},
+    showRetry: function () {}
+  });
+  return run(FAKE_RERUN, 'Ohrid').then(function () {
+    const all = seen.join(' || ');
+    assert.ok(/Dinner \(1 of 5\)/.test(all), all.slice(0, 200));
+    // The stay is 8 days, so dinner has 8 evenings to fill and 5 backups.
+    assert.ok(/8 evenings to fill, 5 backups/.test(all), all.slice(0, 300));
+    assert.ok(/Things to do \(3 of 5\), 8 days to fill/.test(all), all.slice(0, 600));
+    // And the final line reports the city, not a stage count.
+    assert.ok(/Ohrid is ready: \d+ places/.test(all), seen[seen.length - 1]);
   });
 });
 
