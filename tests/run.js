@@ -1863,6 +1863,25 @@ test('a section that came back short says which one and how many were expected',
   assert.ok(/4 places for 9 evenings/.test(text), text);
   assert.ok(/run it again/.test(text), text);
   assert.ok(/what is already here is kept/.test(text), text);
+  // FOUND LIVE 2026-09-16: a top-up paste into a guide that is ALREADY full
+  // must say nothing. Before this, pasting two extra dinners into a guide with
+  // fourteen of them said "Dinner came up short: 2 places for 9 evenings", and
+  // "Let Nomadding detect" reported seven sections short on a complete guide.
+  // A delta is a top-up, so the question can only be asked of the merged total.
+  const full = { schema: 1, city: NINE_DAY.city, sections: [], items: [] };
+  for (let i = 0; i < 14; i++) {
+    full.items.push({ id: 'have' + i, section: 'dinner', status: 'plan', name: 'H' + i, links: [] });
+  }
+  const topUp = { schema: 1, delta: true, items: [
+    { id: 'extra1', section: 'dinner', status: 'plan', name: 'Extra', links: [] },
+    { id: 'extra2', section: 'dinner', status: 'backup', name: 'Spare', links: [] }
+  ] };
+  assert.deepEqual(C.promptKit.coverageShortfall(full, topUp, ['dinner']), [],
+    'a top-up into a full guide was reported as coming up short');
+  // And an empty city with a short paste still warns, which is the case the
+  // warning was written for.
+  assert.equal(C.promptKit.coverageShortfall(NINE_DAY, topUp, ['dinner']).length, 1);
+
   // A pass that returns most of what was asked for is a judgement call, not a
   // failure; nagging about it would train people to ignore the message.
   const plenty = { schema: 1, delta: true, items: [] };
