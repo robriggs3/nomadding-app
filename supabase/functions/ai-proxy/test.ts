@@ -390,7 +390,9 @@ Deno.test("the caps the function enforces are the caps it tells the database", a
   await post(GOOD_BODY);
   const a = rpcCalls[0].args;
   assertEquals(a.monthly_output_cap, 350000);
-  assertEquals(a.large_per_hour, 5);
+  // 25, not 5: staged generation made one guide up to five large calls, so the
+  // old number had quietly become "one guide an hour". See the constant.
+  assertEquals(a.large_per_hour, 25);
   assertEquals(a.large_call_min_tokens, 8000);
   assertEquals(a.inflight_limit, 1);
   assertEquals(a.want_max_tokens, 32000);

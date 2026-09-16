@@ -2769,8 +2769,18 @@ var CityOps = (function () {
       var backups = Math.floor(c.backups * scale);
       items += picks + backups;
       var line = '- `' + id + '`: ' + picks + ' ' + (picks === 1 ? 'pick' : 'picks');
-      if (id === 'dinner') line += ', one for each evening of the stay';
-      if (id === 'activities') line += ', one anchor for each day';
+      // Measured 2026-09-16: the model dated all nine activities and left all
+      // nine dinners undated, from the same wording. "One for each evening" is
+      // read as a quantity unless the `day` field is named, and an undated
+      // dinner list is nine restaurants somewhere in the week rather than a
+      // plan, which is most of what the traveler was asking for.
+      if (id === 'dinner') {
+        line += ', one for each evening of the stay, each carrying the `day` ' +
+          'it belongs to (' + picks + ' different dates, no two the same)';
+      }
+      if (id === 'activities') {
+        line += ', one anchor for each day, each carrying its `day`';
+      }
       if (backups) line += ', plus ' + backups + ' backups marked `"status": "backup"`';
       lines.push(line);
     });
@@ -6454,7 +6464,10 @@ var CityOps = (function () {
   var AI_GUIDE_OUTPUT_TOKENS = 29000;
   var AI_MAX_TOKENS = 32000;
   var AI_LARGE_CALL_MIN_TOKENS = 8000;
-  var AI_LARGE_CALLS_PER_HOUR = 5;
+  // Kept in step with the proxy's own constant, which is the one that decides.
+  // Raised from 5 on 2026-09-16: staged generation made one guide up to FIVE
+  // large calls, so five an hour had quietly become one guide an hour.
+  var AI_LARGE_CALLS_PER_HOUR = 25;
   // The tiers whose AI runs on our key. `managed` is the tier that is sold;
   // `complimentary` is a row only the owner writes, and the proxy decides for
   // itself whether to honour it (see AI_PROXY_TIERS). The app offering the

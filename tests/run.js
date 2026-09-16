@@ -1761,6 +1761,9 @@ test('the prompt PRINTS the computed counts instead of a fixed total', () => {
   assert.ok(/## How many/.test(out), 'no counts block in the prompt');
   assert.ok(/This stay is 9 days long/.test(out), out.slice(out.indexOf('## How many'), 200));
   assert.ok(/`dinner`: 9 picks, one for each evening/.test(out));
+  // Measured 2026-09-16: the same wording got all nine activities dated and all
+  // nine dinners undated, so the `day` field is named rather than implied.
+  assert.ok(/each carrying the `day` it belongs to \(9 different dates/.test(out), out.slice(-600));
   assert.ok(/`activities`: 9 picks, one anchor for each day/.test(out));
   // And it must not carry a fixed number any more, which is what capped a long
   // stay at a short stay's worth of places.

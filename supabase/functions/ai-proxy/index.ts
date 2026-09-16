@@ -57,7 +57,19 @@ const AI_MAX_TOKENS_CEILING = 32000;
 // against a budget sized for whole city guides would make the trip page
 // unusable for the people paying the most.
 const AI_LARGE_CALL_MIN_TOKENS = 8000;
-const AI_LARGE_CALLS_PER_HOUR = 5;
+// Five an hour was written when ONE GUIDE WAS ONE CALL. Staged generation
+// changed the unit: a nine-night city is now five short calls rather than one
+// long one, so the old number stopped meaning "about five big generations an
+// hour" and started meaning "one guide, and nothing else until the hour turns".
+//
+// Measured 2026-09-16: a 9-day guide ran five large calls at 15:30 to 15:34 and
+// the very next generation was refused 429 on every stage. That is the limit
+// doing its job against a number that no longer describes the work.
+//
+// 25 restores the ORIGINAL intent exactly: five guides an hour, at up to five
+// stages each. The money is unchanged either way, because the monthly output
+// cap counts real tokens and is the thing that actually bounds spend.
+const AI_LARGE_CALLS_PER_HOUR = 25;
 const AI_SMALL_CALLS_PER_HOUR = 60;
 // One at a time. A city guide takes 2 to 4 minutes, and two of them at once is
 // either two tabs or a script, and the answer to both is "finish the first".
