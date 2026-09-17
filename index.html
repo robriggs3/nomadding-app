@@ -2489,6 +2489,161 @@ var CityOps = (function () {
   // for; the link's own query is used when it has one, because the model
   // usually wrote the district into it and a district is what separates two
   // cafes of the same name.
+  // ---- how to ask, in order, and what to accept ----
+  //
+  // Measured against Rob's 33 Istanbul places on 2026-09-17, one strategy per
+  // run, every result checked against Istanbul's own bounding box:
+  //
+  //   the link's query, street number and all   14 right,  0 wrong, 19 nothing
+  //   "name, city"                              19 right,  2 WRONG, 11 nothing
+  //   "name, district, city", district verified 19 right,  0 wrong, 14 nothing
+  //
+  // The middle row is the one to refuse. "Workinton, Istanbul" answers with the
+  // Sisli branch and "Vodafone, Istanbul" with the Kagithane one: pins inside
+  // the right city, on the wrong building, which is the failure a traveler
+  // discovers by walking to it. A place missing from the map costs a glance at
+  // the list underneath; a place in the wrong spot costs the evening.
+  //
+  // So: ask precisely first, then ask more loosely but VERIFY the district,
+  // and never accept an answer that cannot be checked.
+  function geocodePlan(item, cityData) {
+    if (placeholderReason(item)) return [];
+    var city = (cityData && cityData.city && cityData.city.name) ? String(cityData.city.name) : '';
+    var link = parseMapQuery(itemMapLink(item));
+    var name = (item && item.name) ? String(item.name) : '';
+    var out = [];
+    // 1. Exactly what the guide wrote. Precise, and on the measured run it was
+    // right every single time it answered at all.
+    var first = geocodeQuery(item, cityData);
+    if (first) out.push({ q: first, district: '' });
+    // 2. The same place without the street number, keeping the DISTRICT, which
+    // is the token that tells two branches of a chain apart.
+    var district = districtFrom(link, city, name);
+    if (name && district) {
+      // The NAME has to be shortened too, not just the query. Guides write
+      // "Vodafone Store Muhurdar Caddesi" and "Ziraat Bankasi Kadikoy Branch
+      // ATM" as the item name, so pasting it whole puts the street straight
+      // back into the question the first attempt already failed on. Measured
+      // 2026-09-17: the full name placed 15 of 33, the short name 19.
+      out.push({ q: shortName(name, district, city) + ', ' + district +
+        (city ? ', ' + city : ''), district: district });
+    }
+    return out;
+  }
+
+  // What a place is CALLED, with the address and the branch words taken off.
+  // Keeps at least the first two words, because a one-word name is usually a
+  // chain and a chain needs whatever else the guide gave us.
+  var BRANCH_WORDS = /^(branch|subesi|sube|atm|store|magaza|magazasi|shop|outlet|location)$/i;
+
+  function shortName(name, district, city) {
+    var words = String(name || '').split(/\s+/);
+    var dN = bareWord(district), cN = bareWord(city);
+    var kept = [];
+    var stop = false;
+    words.forEach(function (w) {
+      var b = bareWord(w);
+      if (!b) return;
+      // Everything from the first street word on is address, not name.
+      if (isStreetWord(w)) { stop = true; return; }
+      if (stop) return;
+      if (b === dN || b === cN) return;
+      if (BRANCH_WORDS.test(b)) return;
+      kept.push(w.replace(/[,]+$/, ''));
+    });
+    var out = kept.join(' ').replace(/^\s+|\s+$/g, '');
+    return out || String(name || '');
+  }
+
+  // The district named in a link query: the last word-group that is not the
+  // city, the place name, or a street. Turkish street words are listed because
+  // this app's guides are full of them and "Recaizade Sokak" is not a district.
+  // ANCHORED, and matched against the bare word. Unanchored, `st` matched
+  // "Istanbul" and every district in the country was read as a street.
+  var STREET_WORDS = /^(caddesi|cadde|cad|sokak|sokagi|sok|bulvari|bulvar|mahallesi|mahalle|mah|street|avenue|road|st|ave|rd)$/i;
+
+  function isStreetWord(w) { return STREET_WORDS.test(bareWord(w)); }
+
+  // Punctuation is stripped from BOTH sides before comparing, or a name
+  // written "Adem Baba, Arnavutkoy" leaves the token "Baba," unmatched against
+  // the name word "Baba" and the district comes back as the second half of the
+  // restaurant's own name. Caught on Rob's guide, 2026-09-17.
+  function bareWord(w) {
+    return normLoose(String(w || '').replace(/[^0-9A-Za-z\u00C0-\u024F\u0130\u0131]+/g, ''));
+  }
+
+  // The district is the word immediately BEFORE the city, and nothing else.
+  //
+  // An earlier version scanned for "the last plausible token", which is the
+  // kind of rule that works on the examples you wrote it against and then
+  // reads "Kemankes" out of "Kemankes Caddesi" and "Baba" out of "Adem Baba".
+  // Guides write "<place> <district> <city>", so that is the only position
+  // worth trusting; when the word there is a street, a number, or part of the
+  // name, there is no district and the second attempt is simply not made.
+  function districtFrom(linkQuery, city, name) {
+    var q = String(linkQuery || '');
+    var cityN = bareWord(city);
+    if (!q || !cityN) return '';
+    var toks = q.replace(/,/g, ' ').split(/\s+/).filter(function (w) { return bareWord(w); });
+    var at = -1;
+    for (var k = toks.length - 1; k >= 0; k--) {
+      if (bareWord(toks[k]) === cityN) { at = k; break; }
+    }
+    if (at <= 0) return '';
+    var w = toks[at - 1];
+    var n = bareWord(w);
+    if (n.length < 4) return '';
+    if (/\d/.test(w)) return '';
+    if (isStreetWord(w)) return '';
+    var nameWords = {};
+    String(name || '').split(/\s+/).forEach(function (x) {
+      var b = bareWord(x);
+      if (b) nameWords[b] = 1;
+    });
+    if (nameWords[n]) return '';
+    return w.replace(/[^0-9A-Za-z\u00C0-\u024F\u0130\u0131]+/g, '');
+  }
+
+
+  // Diacritic and Turkish-dotless-i folding, so "Kadikoy" matches "Kadıköy".
+  // Nominatim answers in the local script; the guides are written both ways.
+  function normLoose(sv) {
+    return String(sv === null || sv === undefined ? '' : sv)
+      .toLowerCase()
+      .replace(/[\u0130\u0131]/g, 'i')
+      .normalize ? String(sv === null || sv === undefined ? '' : sv).toLowerCase()
+        .replace(/[\u0130\u0131]/g, 'i')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      : String(sv || '').toLowerCase();
+  }
+
+  // Is this answer good enough to pin? Two gates, and both have to pass.
+  //
+  // `within` is the city's own bounding box, PADDED. A tight box rejects a
+  // right answer: "Transfer to Istanbul Airport" resolves to Istanbul Airport
+  // at 41.27, 28.73, which is genuinely Istanbul and sits outside the box
+  // Nominatim gives for the city proper.
+  var BBOX_PAD_DEG = 0.35;
+
+  function acceptGeocode(res, opts) {
+    var o = opts || {};
+    if (!res) return false;
+    var pt = okLatLng(Number(res.lat), Number(res.lng));
+    if (!pt) return false;
+    var bb = o.bbox;
+    if (bb && bb.length === 4) {
+      if (pt.lat < bb[0] - BBOX_PAD_DEG || pt.lat > bb[1] + BBOX_PAD_DEG) return false;
+      if (pt.lng < bb[2] - BBOX_PAD_DEG || pt.lng > bb[3] + BBOX_PAD_DEG) return false;
+    }
+    // When the question named a district, the answer has to be in it. This is
+    // the gate that keeps Workinton out of Sisli.
+    if (o.district) {
+      var hay = normLoose(res.display_name || res.name || '');
+      if (hay.indexOf(normLoose(o.district)) === -1) return false;
+    }
+    return true;
+  }
+
   function geocodeQuery(item, cityData) {
     // Never spend a lookup on the app's own template. Measured on Rob's
     // Istanbul: without this the queue would have asked Nominatim for
@@ -11370,6 +11525,9 @@ var CityOps = (function () {
       categories: mapCategories, category: mapCategory, color: mapColor,
       parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
+      shortName: shortName,
+      BBOX_PAD_DEG: BBOX_PAD_DEG,
       renderBlock: renderMapBlock
     },
     planModel: planModel, isPlanDayCollapsed: isPlanDayCollapsed, togglePlanDay: togglePlanDay,
@@ -13711,6 +13869,161 @@ var CityOps = (function () {
   // for; the link's own query is used when it has one, because the model
   // usually wrote the district into it and a district is what separates two
   // cafes of the same name.
+  // ---- how to ask, in order, and what to accept ----
+  //
+  // Measured against Rob's 33 Istanbul places on 2026-09-17, one strategy per
+  // run, every result checked against Istanbul's own bounding box:
+  //
+  //   the link's query, street number and all   14 right,  0 wrong, 19 nothing
+  //   "name, city"                              19 right,  2 WRONG, 11 nothing
+  //   "name, district, city", district verified 19 right,  0 wrong, 14 nothing
+  //
+  // The middle row is the one to refuse. "Workinton, Istanbul" answers with the
+  // Sisli branch and "Vodafone, Istanbul" with the Kagithane one: pins inside
+  // the right city, on the wrong building, which is the failure a traveler
+  // discovers by walking to it. A place missing from the map costs a glance at
+  // the list underneath; a place in the wrong spot costs the evening.
+  //
+  // So: ask precisely first, then ask more loosely but VERIFY the district,
+  // and never accept an answer that cannot be checked.
+  function geocodePlan(item, cityData) {
+    if (placeholderReason(item)) return [];
+    var city = (cityData && cityData.city && cityData.city.name) ? String(cityData.city.name) : '';
+    var link = parseMapQuery(itemMapLink(item));
+    var name = (item && item.name) ? String(item.name) : '';
+    var out = [];
+    // 1. Exactly what the guide wrote. Precise, and on the measured run it was
+    // right every single time it answered at all.
+    var first = geocodeQuery(item, cityData);
+    if (first) out.push({ q: first, district: '' });
+    // 2. The same place without the street number, keeping the DISTRICT, which
+    // is the token that tells two branches of a chain apart.
+    var district = districtFrom(link, city, name);
+    if (name && district) {
+      // The NAME has to be shortened too, not just the query. Guides write
+      // "Vodafone Store Muhurdar Caddesi" and "Ziraat Bankasi Kadikoy Branch
+      // ATM" as the item name, so pasting it whole puts the street straight
+      // back into the question the first attempt already failed on. Measured
+      // 2026-09-17: the full name placed 15 of 33, the short name 19.
+      out.push({ q: shortName(name, district, city) + ', ' + district +
+        (city ? ', ' + city : ''), district: district });
+    }
+    return out;
+  }
+
+  // What a place is CALLED, with the address and the branch words taken off.
+  // Keeps at least the first two words, because a one-word name is usually a
+  // chain and a chain needs whatever else the guide gave us.
+  var BRANCH_WORDS = /^(branch|subesi|sube|atm|store|magaza|magazasi|shop|outlet|location)$/i;
+
+  function shortName(name, district, city) {
+    var words = String(name || '').split(/\s+/);
+    var dN = bareWord(district), cN = bareWord(city);
+    var kept = [];
+    var stop = false;
+    words.forEach(function (w) {
+      var b = bareWord(w);
+      if (!b) return;
+      // Everything from the first street word on is address, not name.
+      if (isStreetWord(w)) { stop = true; return; }
+      if (stop) return;
+      if (b === dN || b === cN) return;
+      if (BRANCH_WORDS.test(b)) return;
+      kept.push(w.replace(/[,]+$/, ''));
+    });
+    var out = kept.join(' ').replace(/^\s+|\s+$/g, '');
+    return out || String(name || '');
+  }
+
+  // The district named in a link query: the last word-group that is not the
+  // city, the place name, or a street. Turkish street words are listed because
+  // this app's guides are full of them and "Recaizade Sokak" is not a district.
+  // ANCHORED, and matched against the bare word. Unanchored, `st` matched
+  // "Istanbul" and every district in the country was read as a street.
+  var STREET_WORDS = /^(caddesi|cadde|cad|sokak|sokagi|sok|bulvari|bulvar|mahallesi|mahalle|mah|street|avenue|road|st|ave|rd)$/i;
+
+  function isStreetWord(w) { return STREET_WORDS.test(bareWord(w)); }
+
+  // Punctuation is stripped from BOTH sides before comparing, or a name
+  // written "Adem Baba, Arnavutkoy" leaves the token "Baba," unmatched against
+  // the name word "Baba" and the district comes back as the second half of the
+  // restaurant's own name. Caught on Rob's guide, 2026-09-17.
+  function bareWord(w) {
+    return normLoose(String(w || '').replace(/[^0-9A-Za-z\u00C0-\u024F\u0130\u0131]+/g, ''));
+  }
+
+  // The district is the word immediately BEFORE the city, and nothing else.
+  //
+  // An earlier version scanned for "the last plausible token", which is the
+  // kind of rule that works on the examples you wrote it against and then
+  // reads "Kemankes" out of "Kemankes Caddesi" and "Baba" out of "Adem Baba".
+  // Guides write "<place> <district> <city>", so that is the only position
+  // worth trusting; when the word there is a street, a number, or part of the
+  // name, there is no district and the second attempt is simply not made.
+  function districtFrom(linkQuery, city, name) {
+    var q = String(linkQuery || '');
+    var cityN = bareWord(city);
+    if (!q || !cityN) return '';
+    var toks = q.replace(/,/g, ' ').split(/\s+/).filter(function (w) { return bareWord(w); });
+    var at = -1;
+    for (var k = toks.length - 1; k >= 0; k--) {
+      if (bareWord(toks[k]) === cityN) { at = k; break; }
+    }
+    if (at <= 0) return '';
+    var w = toks[at - 1];
+    var n = bareWord(w);
+    if (n.length < 4) return '';
+    if (/\d/.test(w)) return '';
+    if (isStreetWord(w)) return '';
+    var nameWords = {};
+    String(name || '').split(/\s+/).forEach(function (x) {
+      var b = bareWord(x);
+      if (b) nameWords[b] = 1;
+    });
+    if (nameWords[n]) return '';
+    return w.replace(/[^0-9A-Za-z\u00C0-\u024F\u0130\u0131]+/g, '');
+  }
+
+
+  // Diacritic and Turkish-dotless-i folding, so "Kadikoy" matches "Kadıköy".
+  // Nominatim answers in the local script; the guides are written both ways.
+  function normLoose(sv) {
+    return String(sv === null || sv === undefined ? '' : sv)
+      .toLowerCase()
+      .replace(/[\u0130\u0131]/g, 'i')
+      .normalize ? String(sv === null || sv === undefined ? '' : sv).toLowerCase()
+        .replace(/[\u0130\u0131]/g, 'i')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      : String(sv || '').toLowerCase();
+  }
+
+  // Is this answer good enough to pin? Two gates, and both have to pass.
+  //
+  // `within` is the city's own bounding box, PADDED. A tight box rejects a
+  // right answer: "Transfer to Istanbul Airport" resolves to Istanbul Airport
+  // at 41.27, 28.73, which is genuinely Istanbul and sits outside the box
+  // Nominatim gives for the city proper.
+  var BBOX_PAD_DEG = 0.35;
+
+  function acceptGeocode(res, opts) {
+    var o = opts || {};
+    if (!res) return false;
+    var pt = okLatLng(Number(res.lat), Number(res.lng));
+    if (!pt) return false;
+    var bb = o.bbox;
+    if (bb && bb.length === 4) {
+      if (pt.lat < bb[0] - BBOX_PAD_DEG || pt.lat > bb[1] + BBOX_PAD_DEG) return false;
+      if (pt.lng < bb[2] - BBOX_PAD_DEG || pt.lng > bb[3] + BBOX_PAD_DEG) return false;
+    }
+    // When the question named a district, the answer has to be in it. This is
+    // the gate that keeps Workinton out of Sisli.
+    if (o.district) {
+      var hay = normLoose(res.display_name || res.name || '');
+      if (hay.indexOf(normLoose(o.district)) === -1) return false;
+    }
+    return true;
+  }
+
   function geocodeQuery(item, cityData) {
     // Never spend a lookup on the app's own template. Measured on Rob's
     // Istanbul: without this the queue would have asked Nominatim for
@@ -22592,6 +22905,9 @@ var CityOps = (function () {
       categories: mapCategories, category: mapCategory, color: mapColor,
       parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
+      shortName: shortName,
+      BBOX_PAD_DEG: BBOX_PAD_DEG,
       renderBlock: renderMapBlock
     },
     planModel: planModel, isPlanDayCollapsed: isPlanDayCollapsed, togglePlanDay: togglePlanDay,
