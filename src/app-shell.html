@@ -1841,7 +1841,13 @@
         return null;
       }
       try {
-        if (kind === 'research') return CityOps.promptKit.buildResearchAllPrompt(tpl, currentData(), store.profile);
+        // The budget the answer has to fit in, so the counts scale to it. The
+        // Research pass covers every section at once, so on a long stay it asks
+        // for far more than one answer holds unless it is told the size.
+        if (kind === 'research') {
+          return CityOps.promptKit.buildResearchAllPrompt(tpl, currentData(), store.profile,
+            CityOps.promptKit.STAGE_MAX_TOKENS);
+        }
         if (kind === 'intel') return CityOps.promptKit.buildIntelPassPrompt(tpl, currentData());
         if (kind === 'ratings') return CityOps.promptKit.buildRatingsPassPrompt(tpl, currentData());
         // One SECTION at a time. A whole-guide prompt pasted into a chat comes
