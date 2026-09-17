@@ -1998,6 +1998,114 @@ test('the progress line carries a clock, and says what silence means', () => {
   assert.ok(/Research/.test(going), going);
 });
 
+// ---------------------------------------------------------------------------
+// Maps (Rob, in Istanbul, 2026-09-17)
+// ---------------------------------------------------------------------------
+test('coordinates are read out of every map-link shape that carries them', () => {
+  const M = C.mapKit;
+  // The shapes a shared Google map actually uses.
+  assert.deepEqual(M.parseLatLng('https://www.google.com/maps/@41.0256,28.9744,17z'),
+    { lat: 41.0256, lng: 28.9744 });
+  assert.deepEqual(M.parseLatLng('https://maps.google.com/?q=41.0256,28.9744'),
+    { lat: 41.0256, lng: 28.9744 });
+  assert.deepEqual(M.parseLatLng('https://www.google.com/maps/place/X/@40.99,29.02,17z/data=!3m1!4b1!3d40.9901!4d29.0256'),
+    { lat: 40.99, lng: 29.02 });
+  assert.deepEqual(M.parseLatLng('geo:41.0082,28.9784'), { lat: 41.0082, lng: 28.9784 });
+  assert.deepEqual(M.parseLatLng('https://maps.apple.com/?ll=41.01,28.97'), { lat: 41.01, lng: 28.97 });
+
+  // A NAME SEARCH pins nothing, and that is what 33 of Rob's 35 Istanbul links
+  // are. The parser must say so rather than invent a point.
+  assert.equal(M.parseLatLng('https://www.google.com/maps/search/?api=1&query=Basilica+Cistern+Istanbul'), null);
+  assert.equal(M.parseLatLng('https://maps.google.com/?cid=...'), null);
+  // 0,0 is the Atlantic: what a broken template writes, never somewhere booked.
+  assert.equal(M.parseLatLng('https://maps.google.com/?q=0,0'), null);
+  // Out of range, and junk, must not throw or pass.
+  assert.equal(M.parseLatLng('https://maps.google.com/?q=91,200'), null);
+  [null, undefined, '', 'not a url', 42].forEach(function (v) {
+    assert.equal(M.parseLatLng(v), null, String(v));
+  });
+});
+
+test('a link with no coordinates still yields the query to look up', () => {
+  const M = C.mapKit;
+  assert.equal(M.parseMapQuery('https://www.google.com/maps/search/?api=1&query=Ciya+Sofrasi+Kadikoy+Istanbul'),
+    'Ciya Sofrasi Kadikoy Istanbul');
+  // Percent-encoded Turkish, which is most of Rob's guide.
+  assert.equal(M.parseMapQuery('https://www.google.com/maps/search/Z%C3%BCbeyir+Ocakba%C5%9F%C4%B1+Beyo%C4%9Flu+Istanbul'),
+    'Zübeyir Ocakbaşı Beyoğlu Istanbul');
+  // A cid link names nothing a geocoder can use.
+  assert.equal(M.parseMapQuery('https://maps.google.com/?cid=...'), '');
+
+  // The query prefers the LINK, because the model wrote the district into it
+  // and a district is what separates two cafes of the same name.
+  const city = { city: { name: 'Istanbul' }, items: [] };
+  const item = { id: 'x', name: 'Montag', links: [{ kind: 'map',
+    href: 'https://www.google.com/maps/search/?api=1&query=Montag+Coffee+Muvakkithane+Kadikoy+Istanbul' }] };
+  assert.equal(M.geocodeQuery(item, city), 'Montag Coffee Muvakkithane Kadikoy Istanbul');
+  // No link: the name, plus the city, and the city is not doubled.
+  assert.equal(M.geocodeQuery({ id: 'y', name: 'Kanaat Lokantasi', links: [] }, city),
+    'Kanaat Lokantasi, Istanbul');
+  // And the app never spends a lookup on its own template text.
+  assert.equal(M.geocodeQuery({ id: 'new-slug', name: 'Real Place Name', links: [] }, city), '');
+  assert.equal(M.geocodeQuery({ id: 'getting-started', name: 'Fill this city with real data', links: [] }, city), '');
+});
+
+test('marker colours follow the tabs a traveler already knows', () => {
+  const M = C.mapKit;
+  // The point of reusing tabForSection: the map and the tab bar can never
+  // disagree about what counts as eating.
+  [['dinner', 'eat'], ['breakfast', 'eat'], ['lunch', 'eat'], ['coffee', 'eat'],
+   ['activities', 'do'], ['museums', 'do'],
+   ['services', 'services'], ['cowork', 'services'],
+   ['stay', 'stay'], ['accommodation', 'stay'],
+   ['practical', 'other'], ['weather', 'other']].forEach(function (pair) {
+    assert.equal(M.category({ id: pair[0] }), pair[1], pair[0]);
+  });
+  // Every bucket has a colour, they are all distinct, and every one is a real
+  // hex value rather than a name a stylesheet might not know.
+  const cats = M.categories();
+  assert.equal(cats.length, 5);
+  const seen = {};
+  cats.forEach(function (c) {
+    assert.ok(/^#[0-9a-f]{6}$/i.test(c.color), c.id + ' has no usable colour: ' + c.color);
+    assert.equal(seen[c.color], undefined, 'two buckets share a colour: ' + c.color);
+    seen[c.color] = 1;
+    assert.equal(M.color(c.id), c.color);
+    assert.ok(c.label && c.label.length > 2, c.id + ' has no legend label');
+  });
+  // An unknown bucket still draws, in the neutral colour.
+  assert.ok(/^#[0-9a-f]{6}$/i.test(M.color('nonsense')));
+});
+
+test('a resolved coordinate is cached onto the item and never looked up twice', () => {
+  const M = C.mapKit;
+  const data = { schema: 1, city: { name: 'Istanbul', dates: { from: '2026-09-16', to: '2026-09-25' } },
+    sections: [{ id: 'dinner', label: 'Dinner' }], items: [
+      { id: 'a', section: 'dinner', name: 'Ciya', links: [{ kind: 'map',
+        href: 'https://www.google.com/maps/search/?api=1&query=Ciya+Kadikoy' }] }
+    ] };
+  assert.equal(M.point(data.items[0]), null, 'a name search must not pretend to be a point');
+  assert.equal(M.points(data).missing.length, 1);
+  assert.equal(M.points(data).missing[0].lookupable, true);
+
+  const next = M.cacheGeo(data, 'a', 40.9901, 29.0256, 'nominatim');
+  assert.ok(next, 'the coordinate was not written onto the item');
+  // The input is never mutated, so a failed commit changes nothing.
+  assert.equal(data.items[0].geo, undefined);
+  const pt = M.point(next.items[0]);
+  assert.deepEqual({ lat: pt.lat, lng: pt.lng }, { lat: 40.9901, lng: 29.0256 });
+  assert.equal(pt.source, 'nominatim');
+  // Now it is placed, so it is never in the lookup queue again. This is the
+  // whole point of caching it: 33 lookups once, not 33 every time he opens it.
+  const after = M.points(next);
+  assert.equal(after.missing.length, 0);
+  assert.equal(after.points.length, 1);
+  assert.equal(after.points[0].color, M.color('eat'));
+  // A bad coordinate is refused rather than written.
+  assert.equal(M.cacheGeo(data, 'a', 999, 999, 'nominatim'), null);
+  assert.equal(M.cacheGeo(data, 'no-such-item', 41, 29, 'nominatim'), null);
+});
+
 test('a paste too big to load is refused in plain words, never trimmed', () => {
   // ADDENDUM 2, Rob 2026-09-16: this is a commercial product, so when something
   // is too big the traveler is TOLD. Silently trimming is the worst option:
