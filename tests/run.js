@@ -2077,6 +2077,89 @@ test('marker colours follow the tabs a traveler already knows', () => {
   assert.ok(/^#[0-9a-f]{6}$/i.test(M.color('nonsense')));
 });
 
+test('a wrong pin is refused, even when it is in the right city', () => {
+  const M = C.mapKit;
+  const bbox = [40.846, 41.166, 28.816, 29.136];   // Istanbul, from Nominatim
+  // THE measurement, 2026-09-17, against Rob's 33 real places:
+  //   the link query           14 right,  0 wrong, 19 nothing
+  //   "name, city"             19 right,  2 WRONG, 11 nothing
+  //   "name, district, city"   with the district VERIFIED: 0 wrong
+  // "Workinton, Istanbul" answers with the Sisli branch. Right city, wrong
+  // building, which is the failure a traveler finds by walking to it.
+  assert.equal(M.accept({ lat: 41.0804, lng: 29.0107,
+    display_name: 'Workinton, Talatpasa Caddesi, Sisli' }, { district: 'Kadikoy', bbox: bbox }), false);
+  assert.equal(M.accept({ lat: 40.9912, lng: 29.0246,
+    display_name: 'Vodafone, Sogutlucesme Caddesi, Osmanaga Mahallesi, Kadıköy' },
+    { district: 'Kadikoy', bbox: bbox }), true, 'the right branch was refused');
+  // Diacritics must not decide it: the guides write Kadikoy, Nominatim answers
+  // Kadıköy, and those are the same district.
+  assert.equal(M.accept({ lat: 40.99, lng: 29.02, display_name: 'X, Kadıköy, İstanbul' },
+    { district: 'Kadikoy', bbox: bbox }), true);
+
+  // Another country is refused whether or not a district was asked for.
+  assert.equal(M.accept({ lat: 48.85, lng: 2.35, display_name: 'Paris' }, { bbox: bbox }), false);
+  // But a TIGHT box rejects a right answer: Istanbul Airport is genuinely
+  // Istanbul and sits outside the box Nominatim gives for the city proper.
+  assert.equal(M.accept({ lat: 41.2749, lng: 28.7323,
+    display_name: 'Istanbul Havalimani, Arnavutkoy' }, { bbox: bbox }), true,
+    'the padding is too tight, so a real place outside the city core is refused');
+  assert.ok(M.BBOX_PAD_DEG >= 0.2, 'a pad this small refuses real outlying places');
+  // Junk is refused rather than thrown on.
+  [null, undefined, {}, { lat: 'x', lng: 'y' }].forEach(function (r) {
+    assert.equal(M.accept(r, { bbox: bbox }), false, JSON.stringify(r));
+  });
+});
+
+test('the geocoder asks precisely first, then loosely with the district kept', () => {
+  const M = C.mapKit;
+  const city = { city: { name: 'Istanbul' }, items: [] };
+  const item = { id: 'v', name: 'Vodafone Store Mühürdar Caddesi', links: [{ kind: 'map',
+    href: 'https://www.google.com/maps/search/?api=1&query=Vodafone+Muhurudar+Caddesi+34A+Kadikoy+Istanbul' }] };
+  const plan = M.plan(item, city);
+  assert.equal(plan.length, 2);
+  // First, exactly what the guide wrote: precise, and on the measured run it
+  // was right every time it answered at all.
+  assert.equal(plan[0].q, 'Vodafone Muhurudar Caddesi 34A Kadikoy Istanbul');
+  assert.equal(plan[0].district, '');
+  // Then the same place without the street, district kept and verified.
+  assert.equal(plan[1].district, 'Kadikoy');
+  // The property, not a tuned string: the second ask must carry the district
+  // and the city, and must NOT carry the street word or the house number that
+  // the first ask already failed on.
+  assert.ok(/, Kadikoy, Istanbul$/.test(plan[1].q), plan[1].q);
+  assert.equal(/Caddesi/i.test(plan[1].q), false, 'the street word survived: ' + plan[1].q);
+  assert.equal(/34A/.test(plan[1].q), false, 'the house number survived: ' + plan[1].q);
+  assert.ok(/^Vodafone/.test(plan[1].q), plan[1].q);
+  // Template text is never looked up at all.
+  assert.deepEqual(M.plan({ id: 'new-slug', name: 'Real Place Name', links: [] }, city), []);
+});
+
+test('the district is the place, never a street number or the name itself', () => {
+  const M = C.mapKit;
+  // "Adem Baba, Arnavutkoy" produced the district "Baba" until punctuation was
+  // stripped from both sides. Caught on Rob's guide, 2026-09-17.
+  assert.equal(M.district('Adem Baba Arnavutköy Istanbul', 'Istanbul', 'Adem Baba, Arnavutköy'), '');
+  assert.equal(M.district('Daisy Laundry Recaizade Sokak 13A Kadikoy Istanbul', 'Istanbul', 'Daisy Laundry'),
+    'Kadikoy');
+  // A street word is not a district, and neither is a house number.
+  assert.equal(M.district('X Kemankes Caddesi 57 Istanbul', 'Istanbul', 'X'), '');
+  // And when the word right before the city IS the street word itself, there
+  // is no district either: "Caddesi" is not a place anybody meets you at.
+  assert.equal(M.district('X Kemankes Caddesi Istanbul', 'Istanbul', 'X'), '');
+  assert.equal(M.district('X Moda Sokak Istanbul', 'Istanbul', 'X'), '');
+  // And the name is shortened for the second ask, or the street goes straight
+  // back into the query the first ask already failed on.
+  const short = M.shortName('Vodafone Store Mühürdar Caddesi', 'Kadikoy', 'Istanbul');
+  assert.equal(/Caddesi/i.test(short), false, 'the street word survived: ' + short);
+  assert.equal(/Store/i.test(short), false, 'the branch word survived: ' + short);
+  assert.ok(/^Vodafone/.test(short), short);
+  assert.equal(M.shortName('Ziraat Bankası Kadıköy Branch ATM', 'Kadikoy', 'Istanbul'), 'Ziraat Bankası');
+  // A name that is already short is left alone.
+  assert.equal(M.shortName('Çiya Sofrası', 'Kadikoy', 'Istanbul'), 'Çiya Sofrası');
+  // And it never returns nothing.
+  assert.ok(M.shortName('Kadikoy', 'Kadikoy', 'Istanbul').length > 0);
+});
+
 test('a resolved coordinate is cached onto the item and never looked up twice', () => {
   const M = C.mapKit;
   const data = { schema: 1, city: { name: 'Istanbul', dates: { from: '2026-09-16', to: '2026-09-25' } },
