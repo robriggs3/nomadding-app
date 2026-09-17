@@ -1868,26 +1868,97 @@
     // That keeps exactly one tested place that ever calls mergeDelta and
     // writes the merged city, and it means a delta from Claude gets the same
     // "review the summary before it lands" moment a pasted delta always got.
+    // One place to offer the way out, so every failure below ends in a button
+    // rather than a paragraph.
+    var againRow = null;
+    function dropAgain() {
+      if (againRow && againRow.parentNode) againRow.parentNode.removeChild(againRow);
+      againRow = null;
+    }
+    function offerRunAgain(kind, btn) {
+      dropAgain();
+      againRow = el('div', 'mrow');
+      var again = el('button', 'ctl to-done', 'Run again');
+      again.type = 'button';
+      again.onclick = function () { dropAgain(); runWithClaude(kind, btn); };
+      againRow.appendChild(again);
+      var copy = el('button', 'ctl', 'Copy prompt instead');
+      copy.type = 'button';
+      copy.onclick = function () { var t = build(kind); if (t !== null) copyOut(t); };
+      againRow.appendChild(copy);
+      if (msg.parentNode) msg.parentNode.insertBefore(againRow, msg.nextSibling);
+      else m.box.appendChild(againRow);
+    }
+
     function runWithClaude(kind, btn) {
       if (!aiOneTapReady()) { msg.textContent = aiNoTransportText(); return; }
       var apiKey = loadApiKey();
       var text = build(kind);
       if (text === null) return;
+      dropAgain();
       var origLabel = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Running...';
-      msg.textContent = 'Starting...';
+      var label = passFor(kind).chip;
+      var startedAt = Date.now();
+      var lastChars = 0;
+      var done = false;
+      // A CLOCK, not just a character count. Rob watched "Writing... 0
+      // characters so far" for minutes: it never said how long it had been, so
+      // there was no way to tell a slow answer from a dead one.
+      function draw() {
+        if (done) return;
+        msg.textContent = CityOps.promptKit.aiRunProgressText({
+          elapsedMs: Date.now() - startedAt, chars: lastChars, label: label });
+      }
+      draw();
+      var tick = setInterval(draw, 1000);
+      // And a deadline, because a run that never answers used to just sit
+      // there. Aborting stops the upstream, so a given-up run costs nothing
+      // further.
+      var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        clearInterval(tick);
+        if (ctl) { try { ctl.abort(); } catch (e) {} }
+        btn.disabled = false;
+        btn.textContent = origLabel;
+        msg.textContent = CityOps.promptKit.aiRunTimeoutText(CityOps.promptKit.AI_RUN_TIMEOUT_MS);
+        offerRunAgain(kind, btn);
+      }, CityOps.promptKit.AI_RUN_TIMEOUT_MS);
+      function settle() { done = true; clearInterval(tick); clearTimeout(timer); }
+
       callClaudeStream(text, apiKey, function (p) {
-        msg.textContent = (p.kind === 'thinking' ? 'Thinking... ' : 'Writing... ') +
-          p.totalChars + ' characters so far.';
-      }).then(function (resultText) {
+        lastChars = p.totalChars;
+        draw();
+        // A stage-sized budget, and no thinking. This pass is a delta, the same
+        // shape as a generation stage, and it was the LAST caller still asking
+        // for the whole 32,000 with adaptive thinking. Measured 2026-09-17:
+        // Rob's Research run reserved 32,000, streamed zero characters, never
+        // settled, and was still open 46 minutes later. That is the 400 second
+        // edge ceiling killing the isolate mid-thinking, the same failure
+        // staging fixed for Generate on 2026-09-09 and never reached here.
+      }, ctl ? ctl.signal : null,
+        { maxTokens: CityOps.promptKit.STAGE_MAX_TOKENS,
+          thinking: CityOps.promptKit.STAGE_THINKING }
+      ).then(function (resultText) {
+        settle();
         btn.disabled = false;
         btn.textContent = origLabel;
         // Through the SAME intake the paste box uses, so a reply that came
         // back as prose or markdown is read here too rather than refused for
         // a format the traveler never chose.
         var read = CityOps.intakeKit.read(resultText, deltaIntakeOpts());
-        if (!read.ok) { msg.textContent = read.message; return; }
+        if (!read.ok) {
+          // The words came from OUR run, so the advice is about our run. The
+          // paste wording told Rob to copy the file again and check a preview
+          // pane, for an answer he never pasted.
+          msg.textContent = CityOps.promptKit.runFragmentText(read.message);
+          keepReplyIn(ta, resultText);
+          offerRunAgain(kind, btn);
+          return;
+        }
         var res = CityOps.mergeDelta(currentData(), read.data);
         if (!res.data) { msg.textContent = 'Nothing was applied:\n' + res.errors.join('\n'); return; }
         // Preview only: fill the textarea and report the counts, same as a
@@ -1896,10 +1967,19 @@
         ta.value = JSON.stringify(read.data, null, 2);
         msg.textContent = 'Claude proposes: ' + enrichSummaryText(res.summary) + '. Review below, then Apply.';
       }).catch(function (e) {
+        settle();
         btn.disabled = false;
         btn.textContent = origLabel;
+        // A run the deadline aborted has already said its piece.
+        if (e && (e.name === 'AbortError' || /abort/i.test(e.message || ''))) return;
         msg.textContent = CityOps.aiProxyKit.errorText(e);
+        offerRunAgain(kind, btn);
       });
+    }
+    // A reply that will not read is still minutes of work: it goes in the paste
+    // box where Apply and the conversion door can still act on it.
+    function keepReplyIn(box, text) {
+      if (box && typeof text === 'string' && text) box.value = text;
     }
     var profileEmpty = CityOps.profile.isEmpty(store.profile);
 
@@ -2029,6 +2109,62 @@
     // is a sign the reply drifted, and they should be told rather than have it
     // filed quietly. It defaults to whatever prompt they last copied, because
     // that is almost always what they are about to paste back.
+    // ---- taking a paste back, and template text that should not be here ----
+    //
+    // Both are OFFERS. Nothing is removed until the traveler presses the
+    // button: this is their guide, and a place they meant to keep is not ours
+    // to tidy away.
+    function drawCleanup() {
+      var wrap = document.getElementById('paste-cleanup');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      var data = currentData();
+      var st = CityOps.liveState() || CityOps.makeStore(activeId, LS).load();
+
+      var found = CityOps.promptKit.placeholderItems(data);
+      if (found.length) {
+        wrap.appendChild(el('p', 'diff', CityOps.promptKit.placeholderText(found)));
+        var row = el('div', 'mrow');
+        var rm = el('button', 'ctl to-done', found.length === 1 ? 'Remove it' : 'Remove them');
+        rm.type = 'button';
+        rm.onclick = function () {
+          var r = CityOps.promptKit.removeItemsById(data, found.map(function (f) { return f.id; }));
+          if (!r.data) return;
+          commitCityData(r.data);
+          msg.textContent = 'Removed ' + r.removed + ' example ' +
+            (r.removed === 1 ? 'place' : 'places') + '. Everything else is untouched.';
+          drawCleanup();
+        };
+        row.appendChild(rm);
+        wrap.appendChild(row);
+      }
+
+      var last = CityOps.promptKit.lastPaste(st);
+      if (last) {
+        var row2 = el('div', 'mrow');
+        var undo = el('button', 'ctl', CityOps.promptKit.undoPasteText(last));
+        undo.type = 'button';
+        undo.title = 'Added ' + String(last.at).slice(0, 16).replace('T', ' ');
+        undo.onclick = function () {
+          var r = CityOps.promptKit.removeItemsById(currentData(), last.ids);
+          if (!r.data) return;
+          var st2 = CityOps.liveState() || CityOps.makeStore(activeId, LS).load();
+          st2.pasteLog = (st2.pasteLog || []).filter(function (e) { return e !== last; });
+          CityOps.makeStore(activeId, LS).save(st2);
+          commitCityData(r.data);
+          msg.textContent = 'Took back ' + r.removed + ' ' +
+            (r.removed === 1 ? 'place' : 'places') + ' from that paste.';
+          drawCleanup();
+        };
+        row2.appendChild(undo);
+        wrap.appendChild(row2);
+      }
+    }
+    var cleanupWrap = el('div', '', '');
+    cleanupWrap.id = 'paste-cleanup';
+    m.box.appendChild(cleanupWrap);
+    drawCleanup();
+
     var scopeRow = el('div', 'mrow');
     var scopeLab = el('label', 'diff', 'What is this?');
     scopeLab.setAttribute('for', 'paste-scope');
@@ -2144,6 +2280,14 @@
         var data = sc.data;
         var res = CityOps.mergeDelta(currentData(), data);
         if (!res.data) { msg.textContent = 'Nothing was applied:\n' + res.errors.join('\n'); return; }
+        // Remember exactly what this paste put in, so it can be taken back
+        // out. A traveler who let something in cannot pick it out of a guide
+        // by hand, and until now nothing recorded which items arrived together.
+        var addedIds = (data.items || []).map(function (it) { return it && it.id; })
+          .filter(function (id) { return id; });
+        var st = CityOps.liveState() || CityOps.makeStore(activeId, LS).load();
+        CityOps.promptKit.recordPaste(st, { scope: sc.scope, ids: addedIds });
+        CityOps.makeStore(activeId, LS).save(st);
         m.close();
         commitCityData(res.data);
         // Says WHICH section filled and how, because "9 added" after a Dinner
