@@ -1907,6 +1907,55 @@ test('a paste can be taken back, exactly and only what it added', () => {
   assert.deepEqual(C.promptKit.lastPaste(st).ids, ['i19']);
 });
 
+test('the Research pass asks for what one answer can hold', () => {
+  // Measured live 2026-09-17 on Rob's 10-day Istanbul: the pass asked for 54
+  // items, returned exactly 12,000 output tokens (the ceiling) and 27,845
+  // characters with five unclosed brackets, after 139 seconds. One answer holds
+  // about 34 items at 350 tokens each. It was over budget before it started.
+  const istanbul = { schema: 1, city: { name: 'Istanbul', country: 'TUR',
+    dates: { from: '2026-09-16', to: '2026-09-25' } }, sections: [], items: [] };
+  const room = Math.floor(C.promptKit.STAGE_MAX_TOKENS / C.promptKit.TOKENS_PER_ITEM);
+  // The constant has to sit on the WORST measured item, not the average: the
+  // cost of being wrong is an answer cut off mid-JSON, not a slightly long one.
+  // Sixteen live stages to 2026-09-17: mean 461 tokens an item, worst 558.
+  assert.ok(C.promptKit.TOKENS_PER_ITEM >= 558,
+    'the per-item budget is under the worst measured item, so it will truncate again');
+  const unbudgeted = C.promptKit.coverageLines(istanbul, null, null);
+  assert.ok(unbudgeted.items > room,
+    'this fixture no longer over-asks, so it cannot prove the fix');
+
+  const budgeted = C.promptKit.coverageLines(istanbul, null, C.promptKit.STAGE_MAX_TOKENS);
+  assert.ok(budgeted.items <= room,
+    'the Research pass still asks for ' + budgeted.items + ' items into an answer holding ' + room);
+  assert.equal(budgeted.scaled, true);
+
+  // And the prompt itself must carry the scaled numbers, plus the note that
+  // says a second pass adds rather than repeats.
+  const out = C.promptKit.buildResearchAllPrompt(FAKE_RERUN, istanbul, PROFILE,
+    C.promptKit.STAGE_MAX_TOKENS);
+  assert.ok(/Return \d+ items in total/.test(out), out.slice(out.indexOf('## How many'), 900));
+  const asked = Number(/Return (\d+) items in total/.exec(out)[1]);
+  assert.ok(asked <= room, 'the prompt asks for ' + asked + ', over the ' + room + ' that fit');
+  assert.ok(/trimmed to what one answer can hold/.test(out), 'the prompt does not say it was trimmed');
+  // Unbudgeted still asks for everything, which is right for a copy-out prompt
+  // a person runs in their own chat with no ceiling.
+  const free = C.promptKit.buildResearchAllPrompt(FAKE_RERUN, istanbul, PROFILE);
+  assert.ok(Number(/Return (\d+) items in total/.exec(free)[1]) > asked);
+});
+
+test('the progress line stops promising a minute once a minute has passed', () => {
+  // A run watched to 239 seconds was still being told the first words usually
+  // arrive within a minute. True at 15s, a small lie at 150s.
+  const early = C.promptKit.aiRunProgressText({ elapsedMs: 15000, chars: 0, label: 'Research' });
+  assert.ok(/first words usually arrive within a minute/.test(early), early);
+  const late = C.promptKit.aiRunProgressText({ elapsedMs: 150000, chars: 0, label: 'Research' });
+  assert.equal(/within a minute/.test(late), false, 'still promising a minute at 150s: ' + late);
+  assert.ok(/still thinking, 150s/.test(late), late);
+  assert.ok(/longer than usual/.test(late), late);
+  // And it says what happens next, so the wait has a known end.
+  assert.ok(/give up at 240s/.test(late), late);
+});
+
 test('a fragment from an in-app run blames the run, not the traveler', () => {
   const paste = C.intakeKit.read('{"schema":1,"delta":true,"items":[{"id":"a"', { mode: 'delta' });
   assert.equal(paste.ok, false);

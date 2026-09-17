@@ -3491,7 +3491,13 @@ var CityOps = (function () {
   // rather than clustering them into one interests bucket. Same assembly as the
   // interests delta so the two read alike; the difference is entirely in the
   // RERUN:RESEARCH instructions this pulls instead of RERUN:INTERESTS.
-  function buildResearchAllPrompt(templateText, cityData, profile) {
+  // maxTokens is the budget the ANSWER has to fit in. Without it this pass asks
+  // for the whole stay's coverage in one call and is cut off mid-JSON:
+  // measured live 2026-09-17 on a 10-day Istanbul, it asked for 54 items,
+  // returned exactly 12,000 output tokens (the ceiling) and 27,845 characters
+  // with five unclosed brackets, after 139 seconds. One answer holds about 34
+  // items at 350 tokens each, so it was over budget by twenty before it began.
+  function buildResearchAllPrompt(templateText, cityData, profile, maxTokens) {
     var rerun = sliceLandmark(templateText, 'RERUN:RESEARCH');
     var contract = sliceLandmark(templateText, 'CONTRACT:ITEM');
     var p = normalizeProfile(profile);
@@ -3502,7 +3508,7 @@ var CityOps = (function () {
     // The counts, computed from the stay, in place of the fixed total the
     // template used to carry. Without this a nine-night city gets the same
     // handful as a three-night one, which is exactly what happened to Rob.
-    out.push(coverageBlock(cityData, null, null), '');
+    out.push(coverageBlock(cityData, null, maxTokens || null), '');
     out.push('## Existing items (do not re-suggest these)', '');
     out = out.concat(itemListLines(cityData && cityData.items));
     out.push('');
@@ -3582,11 +3588,24 @@ var CityOps = (function () {
     return { days: days, sections: sections, total: total };
   }
 
-  // What one item costs to write, near enough to budget a stage with. Measured
-  // from the 2026-09-14 runs: three stages returned 6,315, 6,645 and 6,155
-  // output tokens for 16, 17 and 16 items, so a little under 400 each. 350 is
-  // the working figure with the margin left in on purpose.
-  var TOKENS_PER_ITEM = 350;
+  // What one item costs to write. This was 350, taken from three stages on
+  // 2026-09-14, and it was UNDER the true mean, so every budget built on it has
+  // been optimistic since.
+  //
+  // Across sixteen live stages to 2026-09-17: 81,189 output tokens for 176
+  // items. Mean 461. Worst single stage 558.
+  //
+  // A budget constant should sit on the WORST case, not the average, because
+  // the cost of being wrong is not a slightly long answer, it is an answer cut
+  // off mid-JSON that the traveler cannot use at all. Measured live on Rob's
+  // 10-day Istanbul: at 350 the Research pass asked for 54 items, then for 30
+  // after scaling, and BOTH runs hit the 12,000 ceiling exactly and truncated.
+  // 560 budgets the same answer for 21 items, which fits with room to spare.
+  //
+  // Generation stages are unaffected: they ask for 8 to 17 items, all well
+  // inside 21. This only bites the whole-guide Research pass, which is the one
+  // that was over-asking.
+  var TOKENS_PER_ITEM = 560;
 
   // The stage list for a given stay. A longer stay does not just ask for more,
   // it asks in more sittings, because one stage has to fit in one answer.
@@ -5442,6 +5461,14 @@ var CityOps = (function () {
     if (!chars) {
       // The honest version of the old "0 characters": say it is thinking, and
       // say the wait is expected, because the silence IS the normal first phase.
+      // Past ninety seconds that reassurance has expired, and repeating it is
+      // its own small lie: a run watched to 239 seconds was still being told
+      // the first words usually arrive within a minute.
+      if (secs > 90) {
+        return what + ': still thinking, ' + clock + ' so far. This is longer ' +
+          'than usual. It will give up at ' + Math.round(AI_RUN_TIMEOUT_MS / 1000) +
+          's and offer you a retry.';
+      }
       return what + ': thinking, ' + clock + ' so far. The first words usually ' +
         'arrive within a minute.';
     }
