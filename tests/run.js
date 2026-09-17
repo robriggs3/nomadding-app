@@ -1819,6 +1819,136 @@ test('the merge reports which section it filled, not just how many', () => {
   assert.equal(res.summary.added, 3);
 });
 
+// ---------------------------------------------------------------------------
+// An in-app run that stops is OUR failure (Rob, mid-trip, 2026-09-17)
+// ---------------------------------------------------------------------------
+// A managed Research run sat at "Writing... 0 characters so far" for minutes,
+// returned a fragment with three unclosed brackets, and the app told him to
+// "copy the file again... a preview pane often renders only the first
+// screenful". He had not pasted anything.
+test('the Enrich run asks for a stage-sized answer, not the whole 32,000', () => {
+  // THE CAUSE. ai_calls shows Rob's 09:18:51Z run reserved 32,000 tokens,
+  // streamed zero characters, never settled, and was still open 46 minutes
+  // later: the 400 second edge ceiling killing the isolate mid-thinking. It was
+  // the last caller still on the unstaged budget that staging fixed for
+  // Generate on 2026-09-09.
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function runWithClaude(');
+  assert.ok(start !== -1, 'runWithClaude is missing from the assembled app');
+  const end = html.indexOf('\n    }\n', start);
+  const src = html.slice(start, end);
+  assert.ok(/STAGE_MAX_TOKENS/.test(src),
+    'the Enrich run still asks for the whole-guide budget, which is what stalled');
+  assert.ok(/STAGE_THINKING/.test(src),
+    'the Enrich run still leaves adaptive thinking on, which ate the budget');
+  // And it must have a deadline and a clock, not just a character count.
+  assert.ok(/AI_RUN_TIMEOUT_MS/.test(src), 'the Enrich run has no deadline');
+  assert.ok(/aiRunProgressText/.test(src), 'the Enrich run has no elapsed-time progress');
+});
+
+test('the app recognises its own template coming back as a place', () => {
+  // Rob, mid-trip 2026-09-17. The in-app run was broken so he pasted from chat,
+  // and the chat had copied the CONTRACT:ITEM example out of the prompt and
+  // returned it as a real place. Both of these are verbatim what sat in his
+  // live Istanbul guide among twenty real picks.
+  const data = { schema: 1, city: { name: 'Istanbul', country: 'TR',
+      dates: { from: '2026-09-16', to: '2026-09-25' } }, sections: [], items: [
+    { id: 'basilica-cistern', section: 'activities', status: 'plan',
+      name: 'Basilica Cistern', note: 'The atmospheric Byzantine reservoir.', links: [] },
+    { id: 'new-slug', section: 'activities', status: 'plan', name: 'Real Place Name',
+      note: 'Why it fits, with rating and review count if you have it.', links: [] },
+    { id: 'getting-started', section: 'practical', status: 'plan',
+      name: 'Fill this city with real data',
+      note: 'This is a blank scaffold. Run PROMPT.md for this city.', links: [] }
+  ] };
+  const found = C.promptKit.placeholderItems(data);
+  assert.deepEqual(found.map(function (f) { return f.id; }).sort(),
+    ['getting-started', 'new-slug']);
+  // A real place must never be swept up with them.
+  assert.equal(found.some(function (f) { return f.id === 'basilica-cistern'; }), false,
+    'a real Istanbul place was flagged as template text');
+  const text = C.promptKit.placeholderText(found);
+  assert.ok(/Real Place Name/.test(text), text);
+  assert.ok(/this app's own template/.test(text), text);
+  // It ASKS. Nothing in this guide is ours to tidy away.
+  assert.ok(/Remove them\?/.test(text), text);
+
+  const r = C.promptKit.removeItemsById(data, found.map(function (f) { return f.id; }));
+  assert.equal(r.removed, 2);
+  assert.deepEqual(r.data.items.map(function (i) { return i.id; }), ['basilica-cistern']);
+  // The input is never touched, so a refused offer changes nothing.
+  assert.equal(data.items.length, 3);
+});
+
+test('a paste can be taken back, exactly and only what it added', () => {
+  const st = C.normalizeState({});
+  assert.deepEqual(st.pasteLog, [], 'an old state must read as nothing to undo');
+  assert.equal(C.promptKit.lastPaste(st), null);
+
+  C.promptKit.recordPaste(st, { scope: 'dinner', ids: ['a', 'b'], at: '2026-09-17T09:00:00Z' });
+  C.promptKit.recordPaste(st, { scope: 'activities', ids: ['c'], at: '2026-09-17T10:00:00Z' });
+  const last = C.promptKit.lastPaste(st);
+  assert.deepEqual(last.ids, ['c'], 'the newest paste is the one that comes back');
+  assert.ok(/Undo last paste \(1 place\)/.test(C.promptKit.undoPasteText(last)));
+
+  const data = { schema: 1, items: [
+    { id: 'a', section: 'dinner', name: 'A' }, { id: 'b', section: 'dinner', name: 'B' },
+    { id: 'c', section: 'activities', name: 'C' }, { id: 'mine', section: 'dinner', name: 'Mine' }
+  ] };
+  const r = C.promptKit.removeItemsById(data, last.ids);
+  assert.deepEqual(r.data.items.map(function (i) { return i.id; }), ['a', 'b', 'mine'],
+    'undo took back something it did not add');
+
+  // A short memory, not a history: it rides in the state blob that syncs.
+  for (let i = 0; i < 20; i++) C.promptKit.recordPaste(st, { scope: 'x', ids: ['i' + i] });
+  assert.ok(st.pasteLog.length <= 10, 'the paste log grew without bound: ' + st.pasteLog.length);
+  assert.deepEqual(C.promptKit.lastPaste(st).ids, ['i19']);
+});
+
+test('a fragment from an in-app run blames the run, not the traveler', () => {
+  const paste = C.intakeKit.read('{"schema":1,"delta":true,"items":[{"id":"a"', { mode: 'delta' });
+  assert.equal(paste.ok, false);
+  const run = C.promptKit.runFragmentText(paste.message);
+  // The diagnosis survives: the reply really did stop early.
+  assert.ok(/stops early/.test(run), run);
+  assert.ok(/3 brackets/.test(run), run);
+  // The blame and the paste advice do not.
+  assert.equal(/preview pane/.test(run), false, 'still tells a runner to check a preview pane');
+  assert.equal(/Copy the file again/.test(run), false, 'still tells a runner to re-copy a file');
+  assert.equal(/That paste/.test(run), false, 'still calls our own answer a paste: ' + run);
+  assert.ok(/not anything you did/.test(run), run);
+  assert.ok(/nothing was added to your guide/.test(run), run);
+  assert.ok(/Run again/.test(run), run);
+});
+
+test('a run that never answers says so with a clock, and never blames the guide', () => {
+  const t = C.promptKit.aiRunTimeoutText(240000);
+  assert.ok(/stopped answering after 240 seconds/.test(t), t);
+  assert.ok(/nothing was charged/.test(t), t);
+  assert.ok(/Run again/.test(t), t);
+  // Four minutes is generous against measured stage times of 28 to 90 seconds,
+  // and under the 400 second ceiling that used to kill these runs silently.
+  assert.ok(C.promptKit.AI_RUN_TIMEOUT_MS >= 120000, 'a deadline this short would cut off real runs');
+  assert.ok(C.promptKit.AI_RUN_TIMEOUT_MS < 400000, 'a deadline at or past the edge ceiling never fires first');
+});
+
+test('the progress line carries a clock, and says what silence means', () => {
+  // "Writing... 0 characters so far" for four minutes is the line Rob watched.
+  // It never said how long it had been, so a slow answer and a dead one looked
+  // identical.
+  const quiet = C.promptKit.aiRunProgressText({ elapsedMs: 45000, chars: 0, label: 'Research' });
+  assert.ok(/45s/.test(quiet), quiet);
+  assert.ok(/thinking/.test(quiet), quiet);
+  assert.ok(/first words usually arrive/.test(quiet), quiet);
+  assert.equal(/0 characters/.test(quiet), false, 'still reports zero characters as if it were progress');
+  const going = C.promptKit.aiRunProgressText({ elapsedMs: 92000, chars: 4210, label: 'Research' });
+  assert.ok(/4,210 characters/.test(going), going);
+  assert.ok(/92s/.test(going), going);
+  assert.ok(/Research/.test(going), going);
+});
+
 test('a paste too big to load is refused in plain words, never trimmed', () => {
   // ADDENDUM 2, Rob 2026-09-16: this is a commercial product, so when something
   // is too big the traveler is TOLD. Silently trimming is the worst option:

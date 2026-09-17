@@ -2805,6 +2805,10 @@ var CityOps = (function () {
     // every state written before this feature shipped, filled in here the same
     // way, so an old state simply reads as "no section arranged by hand yet".
     st.sectionItemOrder = st.sectionItemOrder || {};
+    // What each paste added, newest last, so "Undo last paste" can take back
+    // exactly what it put in. Absent in every state written before this
+    // shipped, so an old state simply reads as "no paste to undo".
+    st.pasteLog = Array.isArray(st.pasteLog) ? st.pasteLog : [];
     st.collapsedSections = st.collapsedSections || {};
     // Phase 4: per-day collapse state for the Plan tab's "remaining days" list,
     // the same tri-state pattern as collapsedSections (explicit true/false
@@ -6666,6 +6670,162 @@ var CityOps = (function () {
       '. Nothing was applied, because a fragment would replace a whole guide. Copy the file ' +
       'again and check you have all of it, first character to last: a preview pane often ' +
       'renders only the first screenful, so open the file itself and select all of it there.';
+  }
+
+  // ---- when the words came from an IN-APP run, not a paste ----
+  //
+  // Rob, mid-trip 2026-09-17: a managed Research run sat at "Writing... 0
+  // characters" for minutes, produced a fragment with three unclosed brackets,
+  // and the app told him to "copy the file again and check you have all of it,
+  // a preview pane often renders only the first screenful". He had not pasted
+  // anything. The advice was for a paste, the failure was ours, and it read as
+  // blame pointed at the one person who did nothing wrong.
+  //
+  // Takes the message intake produced and swaps the tail for what is actually
+  // true of a run that stopped: nothing the traveler did caused it, nothing was
+  // charged, and the way out is one button.
+  function runFragmentText(intakeMessage) {
+    var head = String(intakeMessage || '');
+    // Everything up to the first sentence about copying is the DIAGNOSIS, and
+    // that part is still true: the reply really did stop early.
+    var cut = head.indexOf('. Nothing was applied');
+    var what = cut === -1 ? head : head.slice(0, cut);
+    what = what.replace(/^That paste /, 'That answer ').replace(/^That paste$/, 'That answer');
+    return what + '. That is our run stopping early, not anything you did, and ' +
+      'nothing was added to your guide. Press Run again. If it stops again, use ' +
+      'Copy prompt and run it in your own Claude or ChatGPT, which has no time limit.';
+  }
+
+  // How long a delta pass is given before the app stops waiting. A stage-sized
+  // pass answered in 28 to 90 seconds across every measured run on 2026-09-16,
+  // so four minutes is generous rather than tight, and it is comfortably under
+  // the 400 second edge-function ceiling that used to kill these runs silently.
+  var AI_RUN_TIMEOUT_MS = 240000;
+
+  function aiRunTimeoutText(ms) {
+    var secs = Math.round((ms || AI_RUN_TIMEOUT_MS) / 1000);
+    return 'Our server stopped answering after ' + secs + ' seconds, so this run ' +
+      'was given up on. Nothing was added to your guide and nothing was charged ' +
+      'to your allowance. Press Run again.';
+  }
+
+  // The progress line. "Writing... 0 characters so far" for four minutes is the
+  // line Rob watched, and it says nothing a person can act on: not how long it
+  // has been, not whether anything is happening, not what it is even doing.
+  function aiRunProgressText(p) {
+    var o = p || {};
+    var secs = Math.max(0, Math.round((o.elapsedMs || 0) / 1000));
+    var chars = o.chars || 0;
+    var what = o.label ? o.label : 'Claude';
+    var clock = secs + 's';
+    if (!chars) {
+      // The honest version of the old "0 characters": say it is thinking, and
+      // say the wait is expected, because the silence IS the normal first phase.
+      return what + ': thinking, ' + clock + ' so far. The first words usually ' +
+        'arrive within a minute.';
+    }
+    return what + ': writing, ' + chars.toLocaleString() + ' characters in ' + clock + '.';
+  }
+
+  // ---- taking back a paste, and spotting what should never have landed ----
+  //
+  // Rob, mid-trip 2026-09-17: the in-app run was broken so he pasted from chat,
+  // and the chat had copied the TEMPLATE example out of the prompt and returned
+  // it as a real place. His live Istanbul guide now holds "Real Place Name",
+  // note "Why it fits, with rating and review count if you have it.", sitting
+  // among twenty real Istanbul picks.
+  //
+  // Two things follow. The app should RECOGNISE that, because it is the app's
+  // own template coming back, and nothing else looks like it. And a paste
+  // should be undoable, because a traveler who let something in has no way to
+  // pick it back out of a guide by hand.
+
+  // The ids and phrasings the app itself authors. A place matching one of these
+  // came from a template, not from a city.
+  var PLACEHOLDER_IDS = { 'new-slug': 1, 'getting-started': 1 };
+  var PLACEHOLDER_TEXT = [
+    'Why it fits, with rating and review count if you have it.',
+    'This is a blank scaffold.',
+    'Real Place Name'
+  ];
+
+  // Returns [{id, name, section, why}] for items that are template leftovers.
+  // It never removes anything: what to do about them is the traveler's call.
+  function placeholderItems(data) {
+    var items = (data && Array.isArray(data.items)) ? data.items : [];
+    var out = [];
+    items.forEach(function (it) {
+      if (!it || !it.id) return;
+      var why = '';
+      if (PLACEHOLDER_IDS[it.id] === 1) {
+        why = 'the id `' + it.id + '` is one this app writes into its own template';
+      } else {
+        var hay = String(it.name || '') + ' ' + String(it.note || '');
+        for (var i = 0; i < PLACEHOLDER_TEXT.length; i++) {
+          if (hay.indexOf(PLACEHOLDER_TEXT[i]) !== -1) {
+            why = 'it still carries the template wording "' + PLACEHOLDER_TEXT[i] + '"';
+            break;
+          }
+        }
+      }
+      if (why) out.push({ id: it.id, name: it.name || it.id, section: it.section || '', why: why });
+    });
+    return out;
+  }
+
+  function placeholderText(found) {
+    if (!found || !found.length) return '';
+    var named = found.map(function (f) {
+      return '"' + f.name + '"' + (f.section ? ' in ' + f.section : '');
+    }).join(' and ');
+    return found.length + (found.length === 1 ? ' place looks like' : ' places look like') +
+      ' example text rather than somewhere real: ' + named + '. That is this app\'s own ' +
+      'template coming back in an answer, not somewhere you chose. Remove ' +
+      (found.length === 1 ? 'it' : 'them') + '?';
+  }
+
+  // Removes items by id. Returns {data, removed}; the input is never touched,
+  // and an id the guide does not have is simply not found.
+  function removeItemsById(data, ids) {
+    if (!data || !Array.isArray(data.items)) return { data: null, removed: 0 };
+    var kill = {};
+    (ids || []).forEach(function (id) { if (id) kill[id] = 1; });
+    var out = deepClone(data);
+    var before = out.items.length;
+    out.items = out.items.filter(function (it) {
+      return !(it && kill[it.id] === 1);
+    });
+    return { data: out, removed: before - out.items.length };
+  }
+
+  // The newest paste that still has something to take back.
+  function lastPaste(state) {
+    var log = (state && Array.isArray(state.pasteLog)) ? state.pasteLog : [];
+    for (var i = log.length - 1; i >= 0; i--) {
+      if (log[i] && Array.isArray(log[i].ids) && log[i].ids.length) return log[i];
+    }
+    return null;
+  }
+
+  // Newest last, and bounded: this rides along in the state blob that syncs
+  // between devices, so it is a short memory rather than a history.
+  var PASTE_LOG_MAX = 10;
+  function recordPaste(state, entry) {
+    var st = state || {};
+    var log = Array.isArray(st.pasteLog) ? st.pasteLog.slice() : [];
+    if (entry && Array.isArray(entry.ids) && entry.ids.length) {
+      log.push({ at: entry.at || new Date().toISOString(),
+        scope: entry.scope || '', ids: entry.ids.slice() });
+    }
+    while (log.length > PASTE_LOG_MAX) log.shift();
+    st.pasteLog = log;
+    return st;
+  }
+
+  function undoPasteText(entry) {
+    if (!entry) return '';
+    var n = entry.ids.length;
+    return 'Undo last paste (' + n + ' place' + (n === 1 ? '' : 's') + ')';
   }
 
   function intakeRead(text, opts) {
@@ -11816,6 +11976,14 @@ var CityOps = (function () {
       pasteOutOfScopeText: pasteOutOfScopeText,
       // Too big to load, and came back short: both said out loud.
       pasteTooBig: pasteTooBig, PASTE_MAX_ITEMS: PASTE_MAX_ITEMS,
+      // An in-app run that stops is OUR failure, and says so.
+      runFragmentText: runFragmentText, aiRunTimeoutText: aiRunTimeoutText,
+      // Taking a paste back, and spotting template text that should never
+      // have landed in a real guide.
+      placeholderItems: placeholderItems, placeholderText: placeholderText,
+      removeItemsById: removeItemsById, recordPaste: recordPaste,
+      lastPaste: lastPaste, undoPasteText: undoPasteText,
+      aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
       coverageShortfall: coverageShortfall, shortfallText: shortfallText,
       coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
       STAGE_THINKING: STAGE_THINKING,
