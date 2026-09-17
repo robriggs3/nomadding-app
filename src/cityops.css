@@ -614,3 +614,33 @@
    the day rather than to any one pick below it. */
 .day-note{border-left:3px solid var(--accent); padding-left:10px; margin:6px 0 10px;
   font-style:italic; color:var(--text-2);}
+
+/* ---- maps (2026-09-17) ----------------------------------------------------
+   Rob asked for these from Istanbul, standing in the city the guide describes.
+   A list of names is a reference; a map is a decision about where to walk next.
+   Every rule here degrades to nothing useful being lost if Leaflet never
+   loads: the canvas simply stays empty and the page around it is unchanged. */
+.mapblock { margin: 0 0 14px; }
+.mapcanvas {
+  width: 100%; border-radius: 10px; border: 1px solid var(--line, #dbe4e3);
+  background: var(--card, #f2f5f4); overflow: hidden;
+}
+.maplegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; }
+.mapkey { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #5c7077); }
+.mapdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.mapmissing { margin-top: 8px; font-size: 13px; }
+.mapmissing summary { cursor: pointer; color: var(--muted, #5c7077); }
+.mapmissing-list { margin: 6px 0 0; padding-left: 18px; }
+.mapmissing-list li { margin: 3px 0; }
+.mapwhy { color: var(--muted, #5c7077); font-size: 12px; }
+.linklike {
+  background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+  color: var(--accent, #0d6a72); text-decoration: underline;
+}
+/* The pin the marker points at, when a card is reached from the map. */
+.map-target { outline: 2px solid var(--accent, #0d6a72); outline-offset: 3px; }
+.showonmap { font-size: 12px; }
+/* Leaflet's own attribution is required by OSM's tile policy; keep it legible
+   rather than shrinking it out of sight. */
+.leaflet-container { font: inherit; }
+.leaflet-control-attribution { font-size: 10px; }

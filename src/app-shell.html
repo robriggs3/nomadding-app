@@ -1610,6 +1610,197 @@
   // things that have to happen together (canonical write, override clear,
   // sync push, reboot). Returns the city id it wrote, which is not always
   // activeId: appStore.add re-derives the id from the city name and dates.
+  // ---- maps: Leaflet, tiles and one-time geocoding ----
+  //
+  // The engine drew the block, the legend and the "not on the map yet" list.
+  // Everything here is the part that needs the network, and every bit of it is
+  // optional by construction: if the CDN is unreachable the canvas stays empty,
+  // the missing-list still renders, and the guide is exactly as usable as it
+  // was before maps existed. A traveler with no signal is the normal case for
+  // this app, not the edge case.
+  // cdnjs rather than unpkg: Rob has hit content blockers on this app before
+  // (2026-09-08, a whole evening lost to one), and cdnjs is the host least
+  // likely to be on a blocklist. Pinned, because an unpinned tile library is a
+  // silent change to a page somebody is standing in a city reading.
+  var LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+  var LEAFLET_JS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+  var leafletWanted = false;
+  var leafletReady = null;
+
+  function loadLeaflet() {
+    if (leafletReady) return leafletReady;
+    if (typeof window.L !== 'undefined') { leafletReady = Promise.resolve(window.L); return leafletReady; }
+    leafletReady = new Promise(function (resolve) {
+      try {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = LEAFLET_CSS;
+        document.head.appendChild(link);
+        var sc = document.createElement('script');
+        sc.src = LEAFLET_JS;
+        sc.async = true;
+        sc.onload = function () { resolve(window.L || null); };
+        // A tile library that will not load is not an error worth showing: the
+        // page already says which places it could not place, and the rest of
+        // the guide does not depend on any of this.
+        sc.onerror = function () { resolve(null); };
+        document.head.appendChild(sc);
+      } catch (e) { resolve(null); }
+    });
+    return leafletReady;
+  }
+
+  // Scrolls to a card and marks it, which is what a marker tap is FOR: the
+  // map answers "where", the card answers "what", and the trip is the walk
+  // between them.
+  function gotoItem(id) {
+    if (!id) return;
+    var card = document.querySelector('[data-item-id="' + id + '"]');
+    if (!card) return;
+    var det = card.closest ? card.closest('details') : null;
+    if (det && !det.open) det.open = true;
+    var open = card.querySelector ? card.querySelector('details') : null;
+    if (open && !open.open) open.open = true;
+    if (card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.querySelectorAll('.map-target').forEach(function (n) { n.classList.remove('map-target'); });
+    card.classList.add('map-target');
+    setTimeout(function () { card.classList.remove('map-target'); }, 2600);
+  }
+
+  // Every .mapblock the engine just rendered, drawn once Leaflet is here.
+  function drawMaps() {
+    var blocks = [].slice.call(document.querySelectorAll('.mapblock'));
+    var live = blocks.filter(function (b) { return b.mapPayload; });
+    // The "not on the map yet" buttons work with or without a map.
+    blocks.forEach(function (b) {
+      b.querySelectorAll('[data-goto-item]').forEach(function (btn) {
+        btn.onclick = function () { gotoItem(btn.getAttribute('data-goto-item')); };
+      });
+    });
+    // The card's own way back to the map, drawn on every card that can be
+    // pointed at. It scrolls to the nearest map above it and flashes the pin.
+    document.querySelectorAll('[data-mappable="1"]').forEach(function (card) {
+      if (card.querySelector('.showonmap')) return;
+      var b = el('button', 'ctl showonmap', 'Show on map');
+      b.type = 'button';
+      b.onclick = function (ev) {
+        ev.stopPropagation();
+        var id = card.getAttribute('data-item-id');
+        var block = null;
+        blocks.forEach(function (bl) {
+          if (!bl.mapPayload) return;
+          if (bl.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) block = bl;
+        });
+        if (!block) block = live[0];
+        if (block && block.scrollIntoView) block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (block && block.mapFlash) block.mapFlash(id);
+      };
+      var row = card.querySelector('.card-ctl') || card;
+      row.appendChild(b);
+    });
+    if (!live.length) return;
+    leafletWanted = true;
+    loadLeaflet().then(function (L) {
+      if (!L) return;   // offline, blocked, or the CDN is down. Nothing breaks.
+      live.forEach(function (b) {
+        var pay = b.mapPayload;
+        if (!pay || b.mapDrawn) return;
+        var node = document.getElementById(pay.id);
+        if (!node) return;
+        b.mapDrawn = true;
+        try {
+          var map = L.map(node, { scrollWheelZoom: false });
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          }).addTo(map);
+          var bounds = [];
+          var marks = {};
+          pay.points.forEach(function (p) {
+            var mk = L.circleMarker([p.lat, p.lng], {
+              radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
+            }).addTo(map);
+            mk.bindTooltip(p.name, { direction: 'top' });
+            mk.on('click', function () { gotoItem(p.id); });
+            marks[p.id] = mk;
+            bounds.push([p.lat, p.lng]);
+          });
+          if (bounds.length === 1) map.setView(bounds[0], 15);
+          else map.fitBounds(bounds, { padding: [24, 24] });
+          b.mapFlash = function (id) {
+            var hit = marks[id];
+            if (!hit) return;
+            map.setView(hit.getLatLng(), Math.max(map.getZoom(), 15));
+            hit.openTooltip();
+          };
+        } catch (e) { /* a map is never worth a blank page */ }
+      });
+      // Only once a map is actually on screen: a traveler who never opens a
+      // city should never cost anybody a lookup.
+      geocodeMissing();
+    });
+  }
+  CityOps.onMaps = drawMaps;
+
+  // ---- geocoding, once per place, ever ----
+  //
+  // Measured on Rob's Istanbul on 2026-09-17: 0 of 35 items carried a
+  // coordinate and 33 needed a lookup, because every guide this app writes
+  // links to a NAME SEARCH rather than a pin. So the lookup is the normal
+  // path, and caching it onto the item is what stops it being the normal path
+  // twice.
+  //
+  // Nominatim's terms are one request a second and a real User-Agent. Both are
+  // kept. A browser cannot set User-Agent, so the identifying header it does
+  // allow is used, and the referrer carries the app's own domain.
+  var GEO_GAP_MS = 1100;
+  var geocoding = false;
+
+  function geocodeOne(q) {
+    var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+      encodeURIComponent(q);
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.length) return null;
+        var lat = parseFloat(j[0].lat), lng = parseFloat(j[0].lon);
+        return isFinite(lat) && isFinite(lng) ? { lat: lat, lng: lng } : null;
+      })
+      .catch(function () { return null; });
+  }
+
+  // Walks the unplaced items one at a time, writing each result onto the city
+  // as it lands so a closed tab keeps whatever was resolved. Never runs twice
+  // over the same place, and never runs at all without a map on screen.
+  function geocodeMissing() {
+    if (geocoding || !activeId || !has(store.cities, activeId)) return;
+    var st = CityOps.liveState() || CityOps.makeStore(activeId, LS).load();
+    var data = CityOps.effectiveData(store.cities[activeId], st);
+    var r = CityOps.mapKit.points(data);
+    var todo = r.missing.filter(function (m) { return m.lookupable; });
+    if (!todo.length) return;
+    geocoding = true;
+    var i = 0;
+    function step() {
+      if (i >= todo.length) { geocoding = false; return; }
+      var m = todo[i++];
+      var fresh = CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+      var item = (fresh.items || []).filter(function (x) { return x && x.id === m.id; })[0];
+      if (!item || CityOps.mapKit.point(item)) { setTimeout(step, 0); return; }
+      var q = CityOps.mapKit.geocodeQuery(item, fresh);
+      if (!q) { setTimeout(step, 0); return; }
+      geocodeOne(q).then(function (pt) {
+        if (pt) {
+          var next = CityOps.mapKit.cacheGeo(fresh, m.id, pt.lat, pt.lng, 'nominatim');
+          if (next) commitCityData(next);
+        }
+        setTimeout(step, GEO_GAP_MS);
+      });
+    }
+    step();
+  }
+
   function commitCityData(newData) {
     var added = CityOps.appStore.add(store, newData);   // stamps updatedAt now
     store = added.store;

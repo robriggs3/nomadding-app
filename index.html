@@ -833,6 +833,36 @@
 .day-note{border-left:3px solid var(--accent); padding-left:10px; margin:6px 0 10px;
   font-style:italic; color:var(--text-2);}
 
+/* ---- maps (2026-09-17) ----------------------------------------------------
+   Rob asked for these from Istanbul, standing in the city the guide describes.
+   A list of names is a reference; a map is a decision about where to walk next.
+   Every rule here degrades to nothing useful being lost if Leaflet never
+   loads: the canvas simply stays empty and the page around it is unchanged. */
+.mapblock { margin: 0 0 14px; }
+.mapcanvas {
+  width: 100%; border-radius: 10px; border: 1px solid var(--line, #dbe4e3);
+  background: var(--card, #f2f5f4); overflow: hidden;
+}
+.maplegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; }
+.mapkey { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #5c7077); }
+.mapdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.mapmissing { margin-top: 8px; font-size: 13px; }
+.mapmissing summary { cursor: pointer; color: var(--muted, #5c7077); }
+.mapmissing-list { margin: 6px 0 0; padding-left: 18px; }
+.mapmissing-list li { margin: 3px 0; }
+.mapwhy { color: var(--muted, #5c7077); font-size: 12px; }
+.linklike {
+  background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+  color: var(--accent, #0d6a72); text-decoration: underline;
+}
+/* The pin the marker points at, when a card is reached from the map. */
+.map-target { outline: 2px solid var(--accent, #0d6a72); outline-offset: 3px; }
+.showonmap { font-size: 12px; }
+/* Leaflet's own attribution is required by OSM's tile policy; keep it legible
+   rather than shrinking it out of sight. */
+.leaflet-container { font: inherit; }
+.leaflet-control-attribution { font-size: 10px; }
+
   /* --- app shell: multi-city switcher (index.html only) --- */
   /* Dense in-header controls: the h1 itself is the switcher trigger (chevron
      appended after it), and a translucent chip in the header's top-right opens
@@ -2329,6 +2359,193 @@ var CityOps = (function () {
     return 'info'; // fallback bucket: an unrecognized section is reference, not a todo
   }
 
+  // ---- maps: where a place actually is ----
+  //
+  // Rob asked for this from Istanbul, standing in the city the guide describes.
+  // A list of names is a reference; a map is a decision about where to walk
+  // next, and that is the difference between the two.
+  //
+  // Colours follow the TABS, not a new vocabulary: a traveler has already
+  // learned Eat & Drink, Do, Services and Info on every city page, so a marker
+  // that matches its tab needs no legend to be read, only one to be confirmed.
+  var MAP_CATEGORIES = [
+    { id: 'eat', label: 'Eat and drink', color: '#c2410c' },
+    { id: 'do', label: 'Things to do', color: '#0d6a72' },
+    { id: 'services', label: 'Services', color: '#6d28d9' },
+    { id: 'stay', label: 'Stay', color: '#b45309' },
+    { id: 'other', label: 'Other', color: '#52525b' }
+  ];
+
+  function mapCategories() {
+    return MAP_CATEGORIES.map(function (c) { return { id: c.id, label: c.label, color: c.color }; });
+  }
+
+  // A section id (or a whole section object) to the bucket its marker is
+  // coloured by. Built on tabForSection so the map and the tabs can never
+  // disagree about what counts as eating.
+  function mapCategory(sec) {
+    var obj = (sec && typeof sec === 'object') ? sec : { id: String(sec || '') };
+    var id = String(obj.id || '').toLowerCase();
+    if (id === 'stay' || id === 'accommodation' || id === 'lodging' || id === 'hotel') return 'stay';
+    var tab = tabForSection(obj);
+    if (tab === 'eat') return 'eat';
+    if (tab === 'do') return 'do';
+    if (tab === 'services') return 'services';
+    return 'other';
+  }
+
+  function mapColor(categoryId) {
+    var hit = null;
+    MAP_CATEGORIES.forEach(function (c) { if (c.id === categoryId) hit = c.color; });
+    return hit || '#52525b';
+  }
+
+  // ---- reading coordinates out of a map link ----
+  //
+  // Every guide this app has ever produced carries a Google Maps link per
+  // place, and most of them are a NAME SEARCH rather than a pin: measured on
+  // Rob's Istanbul on 2026-09-17, 33 of 35 items had a map link and NONE of
+  // them carried a latitude. So this parser is the cheap path, geocoding is
+  // the fallback, and the honest expectation is that most cities start with
+  // everything in the fallback.
+  //
+  // Returns {lat, lng} when the URL pins a point, or null. Never throws: it
+  // runs over whatever a model wrote into a link field.
+  var LATLNG = '(-?\\d{1,3}(?:\\.\\d+)?)\\s*,\\s*(-?\\d{1,3}(?:\\.\\d+)?)';
+
+  function okLatLng(lat, lng) {
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    // 0,0 is the Atlantic. It is what a broken template writes, never a place
+    // anybody planned to eat at.
+    if (lat === 0 && lng === 0) return null;
+    return { lat: lat, lng: lng };
+  }
+
+  function parseLatLng(url) {
+    var u = String(url === null || url === undefined ? '' : url);
+    if (!u) return null;
+    var m;
+    // geo:lat,lng
+    m = new RegExp('^geo:' + LATLNG).exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // .../@lat,lng,17z  the shape a shared Google map uses
+    m = new RegExp('@' + LATLNG).exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // !3dLAT!4dLNG inside a place URL
+    m = /!3d(-?\d{1,3}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // ?q= / &query= / ?ll= / ?center= carrying a bare pair rather than a name
+    m = new RegExp('[?&](?:q|query|ll|center|daddr|destination)=' + LATLNG + '(?:[&#]|$)', 'i').exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    return null;
+  }
+
+  // What a link can still tell us when it has no coordinates: the place query
+  // a human would have typed. Used to geocode, and better than the item name
+  // alone because the model usually put the district in the link.
+  function parseMapQuery(url) {
+    var u = String(url === null || url === undefined ? '' : url);
+    if (!u) return '';
+    var m = /[?&](?:q|query)=([^&#]+)/i.exec(u);
+    if (!m) m = /\/maps\/search\/([^/?#]+)/i.exec(u);
+    if (!m) m = /\/maps\/place\/([^/@?#]+)/i.exec(u);
+    if (!m) return '';
+    var q = m[1];
+    try { q = decodeURIComponent(q); } catch (e) { /* leave it as written */ }
+    q = q.replace(/\+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    // A cid or ftid link names nothing a geocoder can use.
+    if (!q || /^\.{2,}$/.test(q) || q === '...') return '';
+    return q;
+  }
+
+  // The first map link on an item, whatever else it carries.
+  function itemMapLink(item) {
+    var links = (item && Array.isArray(item.links)) ? item.links : [];
+    var hit = '';
+    links.forEach(function (l) {
+      if (hit || !l || !l.href) return;
+      if (l.kind === 'map' || /maps\.|\/maps\//.test(String(l.href))) hit = String(l.href);
+    });
+    return hit;
+  }
+
+  // Where one item is, and how we know. Order matters: a coordinate CACHED on
+  // the item wins, because it was resolved once and must never be looked up
+  // again; then the link; then nothing, and the item is listed as unplaced.
+  function itemPoint(item) {
+    if (!item) return null;
+    var g = item.geo;
+    if (g && typeof g === 'object') {
+      var cached = okLatLng(Number(g.lat), Number(g.lng));
+      if (cached) return { lat: cached.lat, lng: cached.lng, source: g.source || 'cache' };
+    }
+    var fromLink = parseLatLng(itemMapLink(item));
+    if (fromLink) return { lat: fromLink.lat, lng: fromLink.lng, source: 'link' };
+    return null;
+  }
+
+  // The query to geocode an unplaced item with. "name, city" is what Rob asked
+  // for; the link's own query is used when it has one, because the model
+  // usually wrote the district into it and a district is what separates two
+  // cafes of the same name.
+  function geocodeQuery(item, cityData) {
+    // Never spend a lookup on the app's own template. Measured on Rob's
+    // Istanbul: without this the queue would have asked Nominatim for
+    // "Fill this city with real data, Istanbul" and pinned it somewhere.
+    if (placeholderReason(item)) return '';
+    var city = (cityData && cityData.city && cityData.city.name) ? String(cityData.city.name) : '';
+    var fromLink = parseMapQuery(itemMapLink(item));
+    var name = (item && item.name) ? String(item.name) : '';
+    var base = fromLink || name;
+    if (!base) return '';
+    // Do not repeat the city when the link already names it.
+    if (city && base.toLowerCase().indexOf(city.toLowerCase()) !== -1) return base;
+    return city ? base + ', ' + city : base;
+  }
+
+  // Everything the map needs for a set of items: the ones it can draw, and the
+  // ones it cannot, which the page lists underneath rather than hiding.
+  function mapPoints(data, items) {
+    var list = Array.isArray(items) ? items : ((data && data.items) || []);
+    var secById = {};
+    ((data && data.sections) || []).forEach(function (s) { if (s && s.id) secById[s.id] = s; });
+    var points = [], missing = [];
+    list.forEach(function (it) {
+      if (!it || it.status === 'archived') return;
+      var p = itemPoint(it);
+      var cat = mapCategory(secById[it.section] || { id: it.section });
+      if (p) {
+        points.push({ id: it.id, name: it.name || it.id, section: it.section,
+          category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
+          day: it.day || null });
+      } else {
+        var why = placeholderReason(it) ? 'looks like example text, not a real place'
+          : (geocodeQuery(it, data) ? 'not looked up yet' : 'no address or map link to go on');
+        missing.push({ id: it.id, name: it.name || it.id, section: it.section,
+          category: cat, why: why, lookupable: !!geocodeQuery(it, data) });
+      }
+    });
+    return { points: points, missing: missing };
+  }
+
+  // Writes a resolved coordinate ONTO the item, so it rides through the normal
+  // sync and is never looked up twice. Returns a new guide; the input is not
+  // touched.
+  function cacheGeo(data, id, lat, lng, source) {
+    var ok = okLatLng(Number(lat), Number(lng));
+    if (!data || !Array.isArray(data.items) || !ok) return null;
+    var found = false;
+    var out = deepClone(data);
+    out.items.forEach(function (it) {
+      if (!it || it.id !== id) return;
+      found = true;
+      it.geo = { lat: ok.lat, lng: ok.lng, source: source || 'nominatim',
+        at: new Date().toISOString().slice(0, 10) };
+    });
+    return found ? out : null;
+  }
+
   function setTab(state, tabId) {
     if (TAB_IDS.indexOf(tabId) === -1) throw new Error('bad tab "' + tabId + '"');
     state.tab = tabId;
@@ -5647,23 +5864,28 @@ var CityOps = (function () {
 
   // Returns [{id, name, section, why}] for items that are template leftovers.
   // It never removes anything: what to do about them is the traveler's call.
+  // Why this ONE item looks like template text, or '' when it reads as real.
+  // Shared, because the geocoder needs the same answer the cleanup offer does:
+  // there is no point spending a lookup on "Real Place Name".
+  function placeholderReason(it) {
+    if (!it || !it.id) return '';
+    if (PLACEHOLDER_IDS[it.id] === 1) {
+      return 'the id `' + it.id + '` is one this app writes into its own template';
+    }
+    var hay = String(it.name || '') + ' ' + String(it.note || '');
+    for (var i = 0; i < PLACEHOLDER_TEXT.length; i++) {
+      if (hay.indexOf(PLACEHOLDER_TEXT[i]) !== -1) {
+        return 'it still carries the template wording "' + PLACEHOLDER_TEXT[i] + '"';
+      }
+    }
+    return '';
+  }
+
   function placeholderItems(data) {
     var items = (data && Array.isArray(data.items)) ? data.items : [];
     var out = [];
     items.forEach(function (it) {
-      if (!it || !it.id) return;
-      var why = '';
-      if (PLACEHOLDER_IDS[it.id] === 1) {
-        why = 'the id `' + it.id + '` is one this app writes into its own template';
-      } else {
-        var hay = String(it.name || '') + ' ' + String(it.note || '');
-        for (var i = 0; i < PLACEHOLDER_TEXT.length; i++) {
-          if (hay.indexOf(PLACEHOLDER_TEXT[i]) !== -1) {
-            why = 'it still carries the template wording "' + PLACEHOLDER_TEXT[i] + '"';
-            break;
-          }
-        }
-      }
+      var why = placeholderReason(it);
       if (why) out.push({ id: it.id, name: it.name || it.id, section: it.section || '', why: why });
     });
     return out;
@@ -8807,6 +9029,11 @@ var CityOps = (function () {
     // Stamped on every card everywhere, so revealJustMoved() can find a card
     // again after a re-render relocated it, in any tab.
     container.setAttribute('data-item-id', it.id);
+    // Where this one is, from the card. The map answers "where" and the card
+    // answers "what"; this is the second half of that door, so a place found
+    // by reading can be found again by looking. Only drawn when the place can
+    // actually be pointed at.
+    if (itemPoint(it)) container.setAttribute('data-mappable', '1');
     var hd = cardHeaderBtn(it, status, expanded, dayChip, sec, showWhen);
     hd.onclick = function () { toggleExpand(it.id, status); };
     container.appendChild(hd);
@@ -9203,6 +9430,72 @@ var CityOps = (function () {
     });
   }
 
+  // ---- drawing a map ----
+  //
+  // The engine owns the BLOCK: the container, the legend, the "not on the map
+  // yet" list and the empty state. Leaflet itself is the shell's, because it
+  // is a network dependency and this file has to keep working with no network
+  // at all. If the library never arrives the block still renders, still lists
+  // what it could not place, and the page around it is untouched.
+  var mapSeq = 0;
+
+  function renderMapBlock(data, items, opts) {
+    var o = opts || {};
+    var r = mapPoints(data, items);
+    var wrap = el('div', 'mapblock');
+    if (!r.points.length && !r.missing.length) return null;
+
+    if (r.points.length) {
+      var id = 'map-' + (++mapSeq);
+      var canvas = el('div', 'mapcanvas');
+      canvas.id = id;
+      // Height lives here rather than in CSS so a map is never a zero-pixel
+      // box on a browser that failed to load the stylesheet.
+      canvas.style.height = (o.height || 260) + 'px';
+      canvas.setAttribute('role', 'region');
+      canvas.setAttribute('aria-label', o.label || 'Map of these places');
+      wrap.appendChild(canvas);
+      // What the shell needs to draw into it, without re-deriving any of it.
+      wrap.mapPayload = { id: id, points: r.points, fit: true };
+
+      if (o.legend !== false) {
+        var seen = {};
+        r.points.forEach(function (p) { seen[p.category] = 1; });
+        var legend = el('div', 'maplegend');
+        mapCategories().forEach(function (c) {
+          if (!seen[c.id]) return;
+          var chip = el('span', 'mapkey');
+          var dot = el('span', 'mapdot');
+          dot.style.background = c.color;
+          chip.appendChild(dot);
+          chip.appendChild(el('span', null, c.label));
+          legend.appendChild(chip);
+        });
+        wrap.appendChild(legend);
+      }
+    }
+
+    if (r.missing.length) {
+      var det = el('details', 'mapmissing');
+      var sum = el('summary', null, r.missing.length +
+        (r.missing.length === 1 ? ' place is not on the map yet' : ' places are not on the map yet'));
+      det.appendChild(sum);
+      var ul = el('ul', 'mapmissing-list');
+      r.missing.forEach(function (m) {
+        var li = el('li');
+        var b = el('button', 'linklike', m.name);
+        b.type = 'button';
+        b.setAttribute('data-goto-item', m.id);
+        li.appendChild(b);
+        li.appendChild(el('span', 'mapwhy', ' ' + (m.why || '')));
+        ul.appendChild(li);
+      });
+      det.appendChild(ul);
+      wrap.appendChild(det);
+    }
+    return wrap;
+  }
+
   function renderTabSections(vms, state, totalItems) {
     var main = document.getElementById('main');
     main.innerHTML = '';
@@ -9210,6 +9503,18 @@ var CityOps = (function () {
       main.appendChild(el('p', 'when-line', 'Nothing in this tab yet.'));
       return;
     }
+    var tabItems = [];
+    vms.forEach(function (sv) {
+      (sv.groups || []).forEach(function (g) {
+        (g.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
+      });
+      (sv.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
+    });
+    var tabMap = tabItems.length
+      ? renderMapBlock(effectiveData(ctx.base, state), tabItems,
+          { height: 240, label: 'Map of these places' })
+      : null;
+    if (tabMap) main.appendChild(tabMap);
     var xall = sectionExpandAllRow(vms, totalItems);
     if (xall) main.appendChild(xall);
     vms.forEach(function (sv) { main.appendChild(renderTabSectionBlock(sv, state, totalItems)); });
@@ -9860,12 +10165,19 @@ var CityOps = (function () {
     return group;
   }
 
-  function planDayList(iso, entries) {
+  function planDayList(iso, entries, data) {
     var list = el('div', 'planlist');
     list.setAttribute('data-day-iso', iso);
     if (!entries.length) {
       list.appendChild(el('p', 'when-line empty-note', 'Nothing planned yet.'));
       return list;
+    }
+    // A day's own map, same colours, shorter: on the day you are living, the
+    // question is how far apart today's places are, not where the week is.
+    if (data) {
+      var dayMap = renderMapBlock(data, entries.map(function (e) { return e.it; }),
+        { height: 180, legend: false, label: 'Map of this day' });
+      if (dayMap) list.appendChild(dayMap);
     }
     entries.forEach(function (e) {
       var card = el('div', 'card dragrow' + (e.status === 'done' ? ' item-done' : ''));
@@ -9902,6 +10214,10 @@ var CityOps = (function () {
     var dayIsos = pm.days.map(function (d) { return d.iso; }).filter(Boolean);
     var dayAutos = {};
     pm.days.forEach(function (d) { if (d.iso) dayAutos[d.iso] = !!d.auto; });
+    // One map over the whole stay, before anything else on the page: where the
+    // places ARE is the first question somebody standing in the city asks.
+    var planMap = renderMapBlock(data, null, { height: 300, label: 'Map of every place in this guide' });
+    if (planMap) main.appendChild(planMap);
     var xall = renderExpandAll(dayIsos.length > 1, function (st, collapsed) {
       setPlanDaysCollapsed(st, dayIsos, collapsed, dayAutos);
     });
@@ -9915,7 +10231,7 @@ var CityOps = (function () {
     todayGroup.className += ' planday-today';
     todayGroup.appendChild(el('h2', null, dayLabel(pm.todayIso)));
     appendDayNote(todayGroup, data, state, pm.todayIso);
-    todayGroup.appendChild(planDayList(pm.todayIso, pm.today));
+    todayGroup.appendChild(planDayList(pm.todayIso, pm.today, data));
     main.appendChild(todayGroup);
     pm.days.forEach(function (d) {
       var group = planDayGroup(d.iso);
@@ -9949,7 +10265,7 @@ var CityOps = (function () {
       // A collapsed day deliberately gets NO list: the group is still a drop
       // target (its header is what the dragged card lands on), and having no
       // list is exactly how the drag code recognizes the collapsed case.
-      if (!collapsed) group.appendChild(planDayList(d.iso, d.items));
+      if (!collapsed) group.appendChild(planDayList(d.iso, d.items, data));
       main.appendChild(group);
     });
     if (pm.openTasks.length || pm.doneTasks.length || pm.declinedTasks.length) {
@@ -10019,6 +10335,10 @@ var CityOps = (function () {
     // for only exist now.
     revealJustMoved();
     restoreGripFocus();
+    // Additive hook: the shell draws Leaflet into every .mapblock #main now
+    // holds. Kept out of the engine on purpose, because a tile library is a
+    // network dependency and this file has to render with no network at all.
+    if (CityOps.onMaps) { try { CityOps.onMaps(); } catch (e) { /* a map is never worth a blank page */ } }
     // Additive hook: the app shell sets this to re-render its citybar (name/dates)
     // whenever engine state changes, without the shell re-implementing rerender.
     if (CityOps.onStateChange) CityOps.onStateChange();
@@ -10877,6 +11197,7 @@ var CityOps = (function () {
       // Taking a paste back, and spotting template text that should never
       // have landed in a real guide.
       placeholderItems: placeholderItems, placeholderText: placeholderText,
+      placeholderReason: placeholderReason,
       removeItemsById: removeItemsById, recordPaste: recordPaste,
       lastPaste: lastPaste, undoPasteText: undoPasteText,
       aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
@@ -11016,7 +11337,7 @@ var CityOps = (function () {
       budgetVariance: budgetVariance
     },
     safeHref: safeHref,
-    onStateChange: null, liveState: liveState,
+    onStateChange: null, onMaps: null, liveState: liveState,
     emptyState: emptyState, makeStore: makeStore, setStatus: setStatus,
     effectiveStatus: effectiveStatus, effectiveData: effectiveData, viewModel: viewModel,
     TRANSITIONS: TRANSITIONS, fmtRange: fmtRange, buildExport: buildExport,
@@ -11043,6 +11364,14 @@ var CityOps = (function () {
     // Phase 4 additions: tabs (replaces the Today/Guide/Calendar view switch)
     // and the Plan tab's own model, all pure and unit-tested on their own.
     TABS: TABS, tabForSection: tabForSection, setTab: setTab, effectiveTab: effectiveTab,
+    // Maps. The parser and the colour mapping are pure and tested; the shell
+    // owns Leaflet, the tiles and the one-per-second geocoding.
+    mapKit: {
+      categories: mapCategories, category: mapCategory, color: mapColor,
+      parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
+      point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      renderBlock: renderMapBlock
+    },
     planModel: planModel, isPlanDayCollapsed: isPlanDayCollapsed, togglePlanDay: togglePlanDay,
     // A past day everything on which is settled folds itself away, and says
     // "n done ✓" instead of an item count. Pure, so the rule is one function
@@ -11924,6 +12253,36 @@ CityOps.init();
    the day rather than to any one pick below it. */
 .day-note{border-left:3px solid var(--accent); padding-left:10px; margin:6px 0 10px;
   font-style:italic; color:var(--text-2);}
+
+/* ---- maps (2026-09-17) ----------------------------------------------------
+   Rob asked for these from Istanbul, standing in the city the guide describes.
+   A list of names is a reference; a map is a decision about where to walk next.
+   Every rule here degrades to nothing useful being lost if Leaflet never
+   loads: the canvas simply stays empty and the page around it is unchanged. */
+.mapblock { margin: 0 0 14px; }
+.mapcanvas {
+  width: 100%; border-radius: 10px; border: 1px solid var(--line, #dbe4e3);
+  background: var(--card, #f2f5f4); overflow: hidden;
+}
+.maplegend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; }
+.mapkey { display: inline-flex; align-items: center; gap: 6px; color: var(--muted, #5c7077); }
+.mapdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.mapmissing { margin-top: 8px; font-size: 13px; }
+.mapmissing summary { cursor: pointer; color: var(--muted, #5c7077); }
+.mapmissing-list { margin: 6px 0 0; padding-left: 18px; }
+.mapmissing-list li { margin: 3px 0; }
+.mapwhy { color: var(--muted, #5c7077); font-size: 12px; }
+.linklike {
+  background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+  color: var(--accent, #0d6a72); text-decoration: underline;
+}
+/* The pin the marker points at, when a card is reached from the map. */
+.map-target { outline: 2px solid var(--accent, #0d6a72); outline-offset: 3px; }
+.showonmap { font-size: 12px; }
+/* Leaflet's own attribution is required by OSM's tile policy; keep it legible
+   rather than shrinking it out of sight. */
+.leaflet-container { font: inherit; }
+.leaflet-control-attribution { font-size: 10px; }
 </style>
 </head>
 <body>
@@ -13222,6 +13581,193 @@ var CityOps = (function () {
     return 'info'; // fallback bucket: an unrecognized section is reference, not a todo
   }
 
+  // ---- maps: where a place actually is ----
+  //
+  // Rob asked for this from Istanbul, standing in the city the guide describes.
+  // A list of names is a reference; a map is a decision about where to walk
+  // next, and that is the difference between the two.
+  //
+  // Colours follow the TABS, not a new vocabulary: a traveler has already
+  // learned Eat & Drink, Do, Services and Info on every city page, so a marker
+  // that matches its tab needs no legend to be read, only one to be confirmed.
+  var MAP_CATEGORIES = [
+    { id: 'eat', label: 'Eat and drink', color: '#c2410c' },
+    { id: 'do', label: 'Things to do', color: '#0d6a72' },
+    { id: 'services', label: 'Services', color: '#6d28d9' },
+    { id: 'stay', label: 'Stay', color: '#b45309' },
+    { id: 'other', label: 'Other', color: '#52525b' }
+  ];
+
+  function mapCategories() {
+    return MAP_CATEGORIES.map(function (c) { return { id: c.id, label: c.label, color: c.color }; });
+  }
+
+  // A section id (or a whole section object) to the bucket its marker is
+  // coloured by. Built on tabForSection so the map and the tabs can never
+  // disagree about what counts as eating.
+  function mapCategory(sec) {
+    var obj = (sec && typeof sec === 'object') ? sec : { id: String(sec || '') };
+    var id = String(obj.id || '').toLowerCase();
+    if (id === 'stay' || id === 'accommodation' || id === 'lodging' || id === 'hotel') return 'stay';
+    var tab = tabForSection(obj);
+    if (tab === 'eat') return 'eat';
+    if (tab === 'do') return 'do';
+    if (tab === 'services') return 'services';
+    return 'other';
+  }
+
+  function mapColor(categoryId) {
+    var hit = null;
+    MAP_CATEGORIES.forEach(function (c) { if (c.id === categoryId) hit = c.color; });
+    return hit || '#52525b';
+  }
+
+  // ---- reading coordinates out of a map link ----
+  //
+  // Every guide this app has ever produced carries a Google Maps link per
+  // place, and most of them are a NAME SEARCH rather than a pin: measured on
+  // Rob's Istanbul on 2026-09-17, 33 of 35 items had a map link and NONE of
+  // them carried a latitude. So this parser is the cheap path, geocoding is
+  // the fallback, and the honest expectation is that most cities start with
+  // everything in the fallback.
+  //
+  // Returns {lat, lng} when the URL pins a point, or null. Never throws: it
+  // runs over whatever a model wrote into a link field.
+  var LATLNG = '(-?\\d{1,3}(?:\\.\\d+)?)\\s*,\\s*(-?\\d{1,3}(?:\\.\\d+)?)';
+
+  function okLatLng(lat, lng) {
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    // 0,0 is the Atlantic. It is what a broken template writes, never a place
+    // anybody planned to eat at.
+    if (lat === 0 && lng === 0) return null;
+    return { lat: lat, lng: lng };
+  }
+
+  function parseLatLng(url) {
+    var u = String(url === null || url === undefined ? '' : url);
+    if (!u) return null;
+    var m;
+    // geo:lat,lng
+    m = new RegExp('^geo:' + LATLNG).exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // .../@lat,lng,17z  the shape a shared Google map uses
+    m = new RegExp('@' + LATLNG).exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // !3dLAT!4dLNG inside a place URL
+    m = /!3d(-?\d{1,3}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    // ?q= / &query= / ?ll= / ?center= carrying a bare pair rather than a name
+    m = new RegExp('[?&](?:q|query|ll|center|daddr|destination)=' + LATLNG + '(?:[&#]|$)', 'i').exec(u);
+    if (m) return okLatLng(parseFloat(m[1]), parseFloat(m[2]));
+    return null;
+  }
+
+  // What a link can still tell us when it has no coordinates: the place query
+  // a human would have typed. Used to geocode, and better than the item name
+  // alone because the model usually put the district in the link.
+  function parseMapQuery(url) {
+    var u = String(url === null || url === undefined ? '' : url);
+    if (!u) return '';
+    var m = /[?&](?:q|query)=([^&#]+)/i.exec(u);
+    if (!m) m = /\/maps\/search\/([^/?#]+)/i.exec(u);
+    if (!m) m = /\/maps\/place\/([^/@?#]+)/i.exec(u);
+    if (!m) return '';
+    var q = m[1];
+    try { q = decodeURIComponent(q); } catch (e) { /* leave it as written */ }
+    q = q.replace(/\+/g, ' ').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    // A cid or ftid link names nothing a geocoder can use.
+    if (!q || /^\.{2,}$/.test(q) || q === '...') return '';
+    return q;
+  }
+
+  // The first map link on an item, whatever else it carries.
+  function itemMapLink(item) {
+    var links = (item && Array.isArray(item.links)) ? item.links : [];
+    var hit = '';
+    links.forEach(function (l) {
+      if (hit || !l || !l.href) return;
+      if (l.kind === 'map' || /maps\.|\/maps\//.test(String(l.href))) hit = String(l.href);
+    });
+    return hit;
+  }
+
+  // Where one item is, and how we know. Order matters: a coordinate CACHED on
+  // the item wins, because it was resolved once and must never be looked up
+  // again; then the link; then nothing, and the item is listed as unplaced.
+  function itemPoint(item) {
+    if (!item) return null;
+    var g = item.geo;
+    if (g && typeof g === 'object') {
+      var cached = okLatLng(Number(g.lat), Number(g.lng));
+      if (cached) return { lat: cached.lat, lng: cached.lng, source: g.source || 'cache' };
+    }
+    var fromLink = parseLatLng(itemMapLink(item));
+    if (fromLink) return { lat: fromLink.lat, lng: fromLink.lng, source: 'link' };
+    return null;
+  }
+
+  // The query to geocode an unplaced item with. "name, city" is what Rob asked
+  // for; the link's own query is used when it has one, because the model
+  // usually wrote the district into it and a district is what separates two
+  // cafes of the same name.
+  function geocodeQuery(item, cityData) {
+    // Never spend a lookup on the app's own template. Measured on Rob's
+    // Istanbul: without this the queue would have asked Nominatim for
+    // "Fill this city with real data, Istanbul" and pinned it somewhere.
+    if (placeholderReason(item)) return '';
+    var city = (cityData && cityData.city && cityData.city.name) ? String(cityData.city.name) : '';
+    var fromLink = parseMapQuery(itemMapLink(item));
+    var name = (item && item.name) ? String(item.name) : '';
+    var base = fromLink || name;
+    if (!base) return '';
+    // Do not repeat the city when the link already names it.
+    if (city && base.toLowerCase().indexOf(city.toLowerCase()) !== -1) return base;
+    return city ? base + ', ' + city : base;
+  }
+
+  // Everything the map needs for a set of items: the ones it can draw, and the
+  // ones it cannot, which the page lists underneath rather than hiding.
+  function mapPoints(data, items) {
+    var list = Array.isArray(items) ? items : ((data && data.items) || []);
+    var secById = {};
+    ((data && data.sections) || []).forEach(function (s) { if (s && s.id) secById[s.id] = s; });
+    var points = [], missing = [];
+    list.forEach(function (it) {
+      if (!it || it.status === 'archived') return;
+      var p = itemPoint(it);
+      var cat = mapCategory(secById[it.section] || { id: it.section });
+      if (p) {
+        points.push({ id: it.id, name: it.name || it.id, section: it.section,
+          category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
+          day: it.day || null });
+      } else {
+        var why = placeholderReason(it) ? 'looks like example text, not a real place'
+          : (geocodeQuery(it, data) ? 'not looked up yet' : 'no address or map link to go on');
+        missing.push({ id: it.id, name: it.name || it.id, section: it.section,
+          category: cat, why: why, lookupable: !!geocodeQuery(it, data) });
+      }
+    });
+    return { points: points, missing: missing };
+  }
+
+  // Writes a resolved coordinate ONTO the item, so it rides through the normal
+  // sync and is never looked up twice. Returns a new guide; the input is not
+  // touched.
+  function cacheGeo(data, id, lat, lng, source) {
+    var ok = okLatLng(Number(lat), Number(lng));
+    if (!data || !Array.isArray(data.items) || !ok) return null;
+    var found = false;
+    var out = deepClone(data);
+    out.items.forEach(function (it) {
+      if (!it || it.id !== id) return;
+      found = true;
+      it.geo = { lat: ok.lat, lng: ok.lng, source: source || 'nominatim',
+        at: new Date().toISOString().slice(0, 10) };
+    });
+    return found ? out : null;
+  }
+
   function setTab(state, tabId) {
     if (TAB_IDS.indexOf(tabId) === -1) throw new Error('bad tab "' + tabId + '"');
     state.tab = tabId;
@@ -16540,23 +17086,28 @@ var CityOps = (function () {
 
   // Returns [{id, name, section, why}] for items that are template leftovers.
   // It never removes anything: what to do about them is the traveler's call.
+  // Why this ONE item looks like template text, or '' when it reads as real.
+  // Shared, because the geocoder needs the same answer the cleanup offer does:
+  // there is no point spending a lookup on "Real Place Name".
+  function placeholderReason(it) {
+    if (!it || !it.id) return '';
+    if (PLACEHOLDER_IDS[it.id] === 1) {
+      return 'the id `' + it.id + '` is one this app writes into its own template';
+    }
+    var hay = String(it.name || '') + ' ' + String(it.note || '');
+    for (var i = 0; i < PLACEHOLDER_TEXT.length; i++) {
+      if (hay.indexOf(PLACEHOLDER_TEXT[i]) !== -1) {
+        return 'it still carries the template wording "' + PLACEHOLDER_TEXT[i] + '"';
+      }
+    }
+    return '';
+  }
+
   function placeholderItems(data) {
     var items = (data && Array.isArray(data.items)) ? data.items : [];
     var out = [];
     items.forEach(function (it) {
-      if (!it || !it.id) return;
-      var why = '';
-      if (PLACEHOLDER_IDS[it.id] === 1) {
-        why = 'the id `' + it.id + '` is one this app writes into its own template';
-      } else {
-        var hay = String(it.name || '') + ' ' + String(it.note || '');
-        for (var i = 0; i < PLACEHOLDER_TEXT.length; i++) {
-          if (hay.indexOf(PLACEHOLDER_TEXT[i]) !== -1) {
-            why = 'it still carries the template wording "' + PLACEHOLDER_TEXT[i] + '"';
-            break;
-          }
-        }
-      }
+      var why = placeholderReason(it);
       if (why) out.push({ id: it.id, name: it.name || it.id, section: it.section || '', why: why });
     });
     return out;
@@ -19700,6 +20251,11 @@ var CityOps = (function () {
     // Stamped on every card everywhere, so revealJustMoved() can find a card
     // again after a re-render relocated it, in any tab.
     container.setAttribute('data-item-id', it.id);
+    // Where this one is, from the card. The map answers "where" and the card
+    // answers "what"; this is the second half of that door, so a place found
+    // by reading can be found again by looking. Only drawn when the place can
+    // actually be pointed at.
+    if (itemPoint(it)) container.setAttribute('data-mappable', '1');
     var hd = cardHeaderBtn(it, status, expanded, dayChip, sec, showWhen);
     hd.onclick = function () { toggleExpand(it.id, status); };
     container.appendChild(hd);
@@ -20096,6 +20652,72 @@ var CityOps = (function () {
     });
   }
 
+  // ---- drawing a map ----
+  //
+  // The engine owns the BLOCK: the container, the legend, the "not on the map
+  // yet" list and the empty state. Leaflet itself is the shell's, because it
+  // is a network dependency and this file has to keep working with no network
+  // at all. If the library never arrives the block still renders, still lists
+  // what it could not place, and the page around it is untouched.
+  var mapSeq = 0;
+
+  function renderMapBlock(data, items, opts) {
+    var o = opts || {};
+    var r = mapPoints(data, items);
+    var wrap = el('div', 'mapblock');
+    if (!r.points.length && !r.missing.length) return null;
+
+    if (r.points.length) {
+      var id = 'map-' + (++mapSeq);
+      var canvas = el('div', 'mapcanvas');
+      canvas.id = id;
+      // Height lives here rather than in CSS so a map is never a zero-pixel
+      // box on a browser that failed to load the stylesheet.
+      canvas.style.height = (o.height || 260) + 'px';
+      canvas.setAttribute('role', 'region');
+      canvas.setAttribute('aria-label', o.label || 'Map of these places');
+      wrap.appendChild(canvas);
+      // What the shell needs to draw into it, without re-deriving any of it.
+      wrap.mapPayload = { id: id, points: r.points, fit: true };
+
+      if (o.legend !== false) {
+        var seen = {};
+        r.points.forEach(function (p) { seen[p.category] = 1; });
+        var legend = el('div', 'maplegend');
+        mapCategories().forEach(function (c) {
+          if (!seen[c.id]) return;
+          var chip = el('span', 'mapkey');
+          var dot = el('span', 'mapdot');
+          dot.style.background = c.color;
+          chip.appendChild(dot);
+          chip.appendChild(el('span', null, c.label));
+          legend.appendChild(chip);
+        });
+        wrap.appendChild(legend);
+      }
+    }
+
+    if (r.missing.length) {
+      var det = el('details', 'mapmissing');
+      var sum = el('summary', null, r.missing.length +
+        (r.missing.length === 1 ? ' place is not on the map yet' : ' places are not on the map yet'));
+      det.appendChild(sum);
+      var ul = el('ul', 'mapmissing-list');
+      r.missing.forEach(function (m) {
+        var li = el('li');
+        var b = el('button', 'linklike', m.name);
+        b.type = 'button';
+        b.setAttribute('data-goto-item', m.id);
+        li.appendChild(b);
+        li.appendChild(el('span', 'mapwhy', ' ' + (m.why || '')));
+        ul.appendChild(li);
+      });
+      det.appendChild(ul);
+      wrap.appendChild(det);
+    }
+    return wrap;
+  }
+
   function renderTabSections(vms, state, totalItems) {
     var main = document.getElementById('main');
     main.innerHTML = '';
@@ -20103,6 +20725,18 @@ var CityOps = (function () {
       main.appendChild(el('p', 'when-line', 'Nothing in this tab yet.'));
       return;
     }
+    var tabItems = [];
+    vms.forEach(function (sv) {
+      (sv.groups || []).forEach(function (g) {
+        (g.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
+      });
+      (sv.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
+    });
+    var tabMap = tabItems.length
+      ? renderMapBlock(effectiveData(ctx.base, state), tabItems,
+          { height: 240, label: 'Map of these places' })
+      : null;
+    if (tabMap) main.appendChild(tabMap);
     var xall = sectionExpandAllRow(vms, totalItems);
     if (xall) main.appendChild(xall);
     vms.forEach(function (sv) { main.appendChild(renderTabSectionBlock(sv, state, totalItems)); });
@@ -20753,12 +21387,19 @@ var CityOps = (function () {
     return group;
   }
 
-  function planDayList(iso, entries) {
+  function planDayList(iso, entries, data) {
     var list = el('div', 'planlist');
     list.setAttribute('data-day-iso', iso);
     if (!entries.length) {
       list.appendChild(el('p', 'when-line empty-note', 'Nothing planned yet.'));
       return list;
+    }
+    // A day's own map, same colours, shorter: on the day you are living, the
+    // question is how far apart today's places are, not where the week is.
+    if (data) {
+      var dayMap = renderMapBlock(data, entries.map(function (e) { return e.it; }),
+        { height: 180, legend: false, label: 'Map of this day' });
+      if (dayMap) list.appendChild(dayMap);
     }
     entries.forEach(function (e) {
       var card = el('div', 'card dragrow' + (e.status === 'done' ? ' item-done' : ''));
@@ -20795,6 +21436,10 @@ var CityOps = (function () {
     var dayIsos = pm.days.map(function (d) { return d.iso; }).filter(Boolean);
     var dayAutos = {};
     pm.days.forEach(function (d) { if (d.iso) dayAutos[d.iso] = !!d.auto; });
+    // One map over the whole stay, before anything else on the page: where the
+    // places ARE is the first question somebody standing in the city asks.
+    var planMap = renderMapBlock(data, null, { height: 300, label: 'Map of every place in this guide' });
+    if (planMap) main.appendChild(planMap);
     var xall = renderExpandAll(dayIsos.length > 1, function (st, collapsed) {
       setPlanDaysCollapsed(st, dayIsos, collapsed, dayAutos);
     });
@@ -20808,7 +21453,7 @@ var CityOps = (function () {
     todayGroup.className += ' planday-today';
     todayGroup.appendChild(el('h2', null, dayLabel(pm.todayIso)));
     appendDayNote(todayGroup, data, state, pm.todayIso);
-    todayGroup.appendChild(planDayList(pm.todayIso, pm.today));
+    todayGroup.appendChild(planDayList(pm.todayIso, pm.today, data));
     main.appendChild(todayGroup);
     pm.days.forEach(function (d) {
       var group = planDayGroup(d.iso);
@@ -20842,7 +21487,7 @@ var CityOps = (function () {
       // A collapsed day deliberately gets NO list: the group is still a drop
       // target (its header is what the dragged card lands on), and having no
       // list is exactly how the drag code recognizes the collapsed case.
-      if (!collapsed) group.appendChild(planDayList(d.iso, d.items));
+      if (!collapsed) group.appendChild(planDayList(d.iso, d.items, data));
       main.appendChild(group);
     });
     if (pm.openTasks.length || pm.doneTasks.length || pm.declinedTasks.length) {
@@ -20912,6 +21557,10 @@ var CityOps = (function () {
     // for only exist now.
     revealJustMoved();
     restoreGripFocus();
+    // Additive hook: the shell draws Leaflet into every .mapblock #main now
+    // holds. Kept out of the engine on purpose, because a tile library is a
+    // network dependency and this file has to render with no network at all.
+    if (CityOps.onMaps) { try { CityOps.onMaps(); } catch (e) { /* a map is never worth a blank page */ } }
     // Additive hook: the app shell sets this to re-render its citybar (name/dates)
     // whenever engine state changes, without the shell re-implementing rerender.
     if (CityOps.onStateChange) CityOps.onStateChange();
@@ -21770,6 +22419,7 @@ var CityOps = (function () {
       // Taking a paste back, and spotting template text that should never
       // have landed in a real guide.
       placeholderItems: placeholderItems, placeholderText: placeholderText,
+      placeholderReason: placeholderReason,
       removeItemsById: removeItemsById, recordPaste: recordPaste,
       lastPaste: lastPaste, undoPasteText: undoPasteText,
       aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
@@ -21909,7 +22559,7 @@ var CityOps = (function () {
       budgetVariance: budgetVariance
     },
     safeHref: safeHref,
-    onStateChange: null, liveState: liveState,
+    onStateChange: null, onMaps: null, liveState: liveState,
     emptyState: emptyState, makeStore: makeStore, setStatus: setStatus,
     effectiveStatus: effectiveStatus, effectiveData: effectiveData, viewModel: viewModel,
     TRANSITIONS: TRANSITIONS, fmtRange: fmtRange, buildExport: buildExport,
@@ -21936,6 +22586,14 @@ var CityOps = (function () {
     // Phase 4 additions: tabs (replaces the Today/Guide/Calendar view switch)
     // and the Plan tab's own model, all pure and unit-tested on their own.
     TABS: TABS, tabForSection: tabForSection, setTab: setTab, effectiveTab: effectiveTab,
+    // Maps. The parser and the colour mapping are pure and tested; the shell
+    // owns Leaflet, the tiles and the one-per-second geocoding.
+    mapKit: {
+      categories: mapCategories, category: mapCategory, color: mapColor,
+      parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
+      point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      renderBlock: renderMapBlock
+    },
     planModel: planModel, isPlanDayCollapsed: isPlanDayCollapsed, togglePlanDay: togglePlanDay,
     // A past day everything on which is settled folds itself away, and says
     // "n done ✓" instead of an item count. Pure, so the rule is one function
@@ -24204,6 +24862,197 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // things that have to happen together (canonical write, override clear,
   // sync push, reboot). Returns the city id it wrote, which is not always
   // activeId: appStore.add re-derives the id from the city name and dates.
+  // ---- maps: Leaflet, tiles and one-time geocoding ----
+  //
+  // The engine drew the block, the legend and the "not on the map yet" list.
+  // Everything here is the part that needs the network, and every bit of it is
+  // optional by construction: if the CDN is unreachable the canvas stays empty,
+  // the missing-list still renders, and the guide is exactly as usable as it
+  // was before maps existed. A traveler with no signal is the normal case for
+  // this app, not the edge case.
+  // cdnjs rather than unpkg: Rob has hit content blockers on this app before
+  // (2026-09-08, a whole evening lost to one), and cdnjs is the host least
+  // likely to be on a blocklist. Pinned, because an unpinned tile library is a
+  // silent change to a page somebody is standing in a city reading.
+  var LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+  var LEAFLET_JS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+  var leafletWanted = false;
+  var leafletReady = null;
+
+  function loadLeaflet() {
+    if (leafletReady) return leafletReady;
+    if (typeof window.L !== 'undefined') { leafletReady = Promise.resolve(window.L); return leafletReady; }
+    leafletReady = new Promise(function (resolve) {
+      try {
+        var link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = LEAFLET_CSS;
+        document.head.appendChild(link);
+        var sc = document.createElement('script');
+        sc.src = LEAFLET_JS;
+        sc.async = true;
+        sc.onload = function () { resolve(window.L || null); };
+        // A tile library that will not load is not an error worth showing: the
+        // page already says which places it could not place, and the rest of
+        // the guide does not depend on any of this.
+        sc.onerror = function () { resolve(null); };
+        document.head.appendChild(sc);
+      } catch (e) { resolve(null); }
+    });
+    return leafletReady;
+  }
+
+  // Scrolls to a card and marks it, which is what a marker tap is FOR: the
+  // map answers "where", the card answers "what", and the trip is the walk
+  // between them.
+  function gotoItem(id) {
+    if (!id) return;
+    var card = document.querySelector('[data-item-id="' + id + '"]');
+    if (!card) return;
+    var det = card.closest ? card.closest('details') : null;
+    if (det && !det.open) det.open = true;
+    var open = card.querySelector ? card.querySelector('details') : null;
+    if (open && !open.open) open.open = true;
+    if (card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.querySelectorAll('.map-target').forEach(function (n) { n.classList.remove('map-target'); });
+    card.classList.add('map-target');
+    setTimeout(function () { card.classList.remove('map-target'); }, 2600);
+  }
+
+  // Every .mapblock the engine just rendered, drawn once Leaflet is here.
+  function drawMaps() {
+    var blocks = [].slice.call(document.querySelectorAll('.mapblock'));
+    var live = blocks.filter(function (b) { return b.mapPayload; });
+    // The "not on the map yet" buttons work with or without a map.
+    blocks.forEach(function (b) {
+      b.querySelectorAll('[data-goto-item]').forEach(function (btn) {
+        btn.onclick = function () { gotoItem(btn.getAttribute('data-goto-item')); };
+      });
+    });
+    // The card's own way back to the map, drawn on every card that can be
+    // pointed at. It scrolls to the nearest map above it and flashes the pin.
+    document.querySelectorAll('[data-mappable="1"]').forEach(function (card) {
+      if (card.querySelector('.showonmap')) return;
+      var b = el('button', 'ctl showonmap', 'Show on map');
+      b.type = 'button';
+      b.onclick = function (ev) {
+        ev.stopPropagation();
+        var id = card.getAttribute('data-item-id');
+        var block = null;
+        blocks.forEach(function (bl) {
+          if (!bl.mapPayload) return;
+          if (bl.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) block = bl;
+        });
+        if (!block) block = live[0];
+        if (block && block.scrollIntoView) block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (block && block.mapFlash) block.mapFlash(id);
+      };
+      var row = card.querySelector('.card-ctl') || card;
+      row.appendChild(b);
+    });
+    if (!live.length) return;
+    leafletWanted = true;
+    loadLeaflet().then(function (L) {
+      if (!L) return;   // offline, blocked, or the CDN is down. Nothing breaks.
+      live.forEach(function (b) {
+        var pay = b.mapPayload;
+        if (!pay || b.mapDrawn) return;
+        var node = document.getElementById(pay.id);
+        if (!node) return;
+        b.mapDrawn = true;
+        try {
+          var map = L.map(node, { scrollWheelZoom: false });
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          }).addTo(map);
+          var bounds = [];
+          var marks = {};
+          pay.points.forEach(function (p) {
+            var mk = L.circleMarker([p.lat, p.lng], {
+              radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
+            }).addTo(map);
+            mk.bindTooltip(p.name, { direction: 'top' });
+            mk.on('click', function () { gotoItem(p.id); });
+            marks[p.id] = mk;
+            bounds.push([p.lat, p.lng]);
+          });
+          if (bounds.length === 1) map.setView(bounds[0], 15);
+          else map.fitBounds(bounds, { padding: [24, 24] });
+          b.mapFlash = function (id) {
+            var hit = marks[id];
+            if (!hit) return;
+            map.setView(hit.getLatLng(), Math.max(map.getZoom(), 15));
+            hit.openTooltip();
+          };
+        } catch (e) { /* a map is never worth a blank page */ }
+      });
+      // Only once a map is actually on screen: a traveler who never opens a
+      // city should never cost anybody a lookup.
+      geocodeMissing();
+    });
+  }
+  CityOps.onMaps = drawMaps;
+
+  // ---- geocoding, once per place, ever ----
+  //
+  // Measured on Rob's Istanbul on 2026-09-17: 0 of 35 items carried a
+  // coordinate and 33 needed a lookup, because every guide this app writes
+  // links to a NAME SEARCH rather than a pin. So the lookup is the normal
+  // path, and caching it onto the item is what stops it being the normal path
+  // twice.
+  //
+  // Nominatim's terms are one request a second and a real User-Agent. Both are
+  // kept. A browser cannot set User-Agent, so the identifying header it does
+  // allow is used, and the referrer carries the app's own domain.
+  var GEO_GAP_MS = 1100;
+  var geocoding = false;
+
+  function geocodeOne(q) {
+    var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+      encodeURIComponent(q);
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.length) return null;
+        var lat = parseFloat(j[0].lat), lng = parseFloat(j[0].lon);
+        return isFinite(lat) && isFinite(lng) ? { lat: lat, lng: lng } : null;
+      })
+      .catch(function () { return null; });
+  }
+
+  // Walks the unplaced items one at a time, writing each result onto the city
+  // as it lands so a closed tab keeps whatever was resolved. Never runs twice
+  // over the same place, and never runs at all without a map on screen.
+  function geocodeMissing() {
+    if (geocoding || !activeId || !has(store.cities, activeId)) return;
+    var st = CityOps.liveState() || CityOps.makeStore(activeId, LS).load();
+    var data = CityOps.effectiveData(store.cities[activeId], st);
+    var r = CityOps.mapKit.points(data);
+    var todo = r.missing.filter(function (m) { return m.lookupable; });
+    if (!todo.length) return;
+    geocoding = true;
+    var i = 0;
+    function step() {
+      if (i >= todo.length) { geocoding = false; return; }
+      var m = todo[i++];
+      var fresh = CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+      var item = (fresh.items || []).filter(function (x) { return x && x.id === m.id; })[0];
+      if (!item || CityOps.mapKit.point(item)) { setTimeout(step, 0); return; }
+      var q = CityOps.mapKit.geocodeQuery(item, fresh);
+      if (!q) { setTimeout(step, 0); return; }
+      geocodeOne(q).then(function (pt) {
+        if (pt) {
+          var next = CityOps.mapKit.cacheGeo(fresh, m.id, pt.lat, pt.lng, 'nominatim');
+          if (next) commitCityData(next);
+        }
+        setTimeout(step, GEO_GAP_MS);
+      });
+    }
+    step();
+  }
+
   function commitCityData(newData) {
     var added = CityOps.appStore.add(store, newData);   // stamps updatedAt now
     store = added.store;
