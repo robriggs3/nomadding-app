@@ -20,8 +20,27 @@ function loadCityOps() {
       insertBefore: function (c) { this.children.unshift(c); return c; },
       setAttribute: function (k, v) { this.attrs[k] = v; },
       getAttribute: function (k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
-      querySelector: function () { return null; },
-      querySelectorAll: function () { return []; },
+      querySelector: function (sel) { return this.querySelectorAll(sel)[0] || null; },
+      // Attribute selectors only, and an unsupported one THROWS rather than
+      // returning [].
+      //
+      // This used to return [] for everything, which meant a test could query
+      // for a control, get nothing back, and assert something true about
+      // nothing. That is the same shape as the bug that hid the map for two
+      // days: a check that reported healthy because it was looking at an empty
+      // list. A loud failure here is worth more than a convenient empty one.
+      querySelectorAll: function (sel) {
+        var m = /^\[([a-zA-Z-]+)\]$/.exec(String(sel || ''));
+        if (!m) throw new Error('stub DOM: unsupported selector "' + sel + '"');
+        var want = m[1], out = [];
+        (function walk(n) {
+          (n.children || []).forEach(function (c) {
+            if (c && c.attrs && Object.prototype.hasOwnProperty.call(c.attrs, want)) out.push(c);
+            walk(c);
+          });
+        })(this);
+        return out;
+      },
       get firstChild() { return this.children[0] || null; }
     };
   }

@@ -1691,6 +1691,9 @@
       b.querySelectorAll('[data-goto-item]').forEach(function (btn) {
         btn.onclick = function () { gotoItem(btn.getAttribute('data-goto-item')); };
       });
+      b.querySelectorAll('[data-place-item]').forEach(function (btn) {
+        btn.onclick = function () { openPlacePinModal(btn.getAttribute('data-place-item')); };
+      });
     });
     // The card's own way back to the map, drawn on every card that can be
     // pointed at. It scrolls to the nearest map above it and flashes the pin.
@@ -5049,6 +5052,122 @@
     return { wrap: wrap, box: box, close: function () { wrap.remove(); } };
   }
 
+  // ---- Drop a pin yourself ----
+  //
+  // The end of the road for a place no search can find. Measured on Rob's live
+  // Istanbul guide 2026-09-17: of 35 places, 15 placed, 18 searched and simply
+  // not in OpenStreetMap, 2 with no address text to search on. The geocoder is
+  // already doing the right thing by refusing answers it cannot verify against
+  // the district, because a pin on the wrong branch of a chain costs an evening
+  // and a missing pin costs a glance at the list. But refusing is not finding,
+  // and those 18 were never going to resolve themselves.
+  //
+  // So the traveler places it. He is standing in the city, he knows where the
+  // place is, and one tap on a map he can see beats every heuristic in this
+  // file. His pin is stored with source 'manual' and is never looked up again.
+  function openPlacePinModal(id) {
+    if (!activeId || !has(store.cities, activeId)) return;
+    function freshData() {
+      return CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+    }
+    var data = freshData();
+    var item = (data.items || []).filter(function (x) { return x && x.id === id; })[0];
+    if (!item) return;
+    var existing = CityOps.mapKit.point(item);
+    var byHand = CityOps.mapKit.isHandPlaced(item);
+    var name = item.name || 'this place';
+
+    var m = modalShell((existing ? 'Move ' : 'Place ') + name);
+    m.box.appendChild(el('p', 'diff', existing
+      ? (byHand
+        ? 'Your own pin. Drag it, or tap the map, to move it.'
+        : 'This pin came from a search. If it is on the wrong building, tap where it really is: your pin wins from then on.')
+      : 'Nothing could look this one up, so it is not on the map. Tap the map where it actually is, then save.'));
+
+    var canvas = el('div', 'mapcanvas place-canvas');
+    canvas.style.height = '300px';
+    m.box.appendChild(canvas);
+    var msg = el('div', 'diff', '');
+    m.box.appendChild(msg);
+
+    var picked = existing ? { lat: existing.lat, lng: existing.lng } : null;
+    var row = el('div', 'mrow');
+    var save = el('button', 'ctl to-done', 'Save this spot');
+    save.type = 'button';
+    save.disabled = !picked;
+    save.onclick = function () {
+      if (!picked) return;
+      var next = CityOps.mapKit.placeByHand(freshData(), id, picked.lat, picked.lng);
+      m.close();
+      if (next) { commitCityData(next); setTimeout(function () { gotoItem(id); }, 0); }
+    };
+    row.appendChild(save);
+    if (existing) {
+      var drop = el('button', 'ctl', 'Remove pin');
+      drop.type = 'button';
+      drop.title = byHand
+        ? 'Take your pin off. The place stays in the guide.'
+        : 'Take this pin off and let it be looked up again.';
+      drop.onclick = function () {
+        var next = CityOps.mapKit.clearPoint(freshData(), id);
+        m.close();
+        if (next) commitCityData(next);
+      };
+      row.appendChild(drop);
+    }
+    var cancel = el('button', 'ctl', 'Cancel');
+    cancel.type = 'button';
+    cancel.onclick = function () { m.close(); };
+    row.appendChild(cancel);
+    m.box.appendChild(row);
+
+    // The map itself. Everything above works as a dialog whether or not
+    // Leaflet arrives; only the picking needs it, so that is the only part
+    // that waits, and a failure says so in words instead of showing a grey box.
+    msg.textContent = 'Loading the map...';
+    leafletWanted = true;
+    loadLeaflet().then(function (L) {
+      if (!L) {
+        msg.textContent = 'The map could not load, so there is nothing to tap. ' +
+          'This needs a connection once; everything else in the guide works offline.';
+        return;
+      }
+      msg.textContent = '';
+      var start = picked || CityOps.mapKit.cityCenter(data);
+      var map = L.map(canvas, { scrollWheelZoom: false })
+        .setView(start ? [start.lat, start.lng] : [20, 0], start ? (picked ? 16 : 13) : 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }).addTo(map);
+      if (!start) {
+        msg.textContent = 'This city has no coordinates yet, so the map opens on the world. ' +
+          'Zoom to the city and tap the spot.';
+      }
+      var mark = null;
+      function put(lat, lng) {
+        picked = { lat: lat, lng: lng };
+        save.disabled = false;
+        if (mark) { mark.setLatLng([lat, lng]); return; }
+        mark = L.marker([lat, lng], {
+          icon: pinIcon(L, CityOps.mapKit.color(CityOps.mapKit.category({ id: item.section }))),
+          draggable: true
+        }).addTo(map);
+        mark.on('dragend', function () {
+          var ll = mark.getLatLng();
+          picked = { lat: ll.lat, lng: ll.lng };
+        });
+      }
+      if (picked) put(picked.lat, picked.lng);
+      map.on('click', function (e) { put(e.latlng.lat, e.latlng.lng); });
+      // Leaflet measures its container on creation, and this one was display:
+      // none until the modal opened one tick ago. Without this the tiles draw
+      // into a zero-width box and the map looks broken on a phone.
+      setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, 0);
+    });
+  }
+
   function openSignInModal() {
     var m = modalShell('Sign in to sync');
     m.box.appendChild(el('p', 'diff', 'Your cities and your progress follow you to your other devices. ' +
@@ -5197,6 +5316,8 @@
   // CityOpsApp at all) simply never shows a button that has nothing behind
   // it: no Claude key, no embedded PROMPT.md, no canonical city record.
   //   askPlace(id)         -> the ✨ on an un-researched card
+  //   placePin(id)         -> the 📍 on a card, and every "Place it" in a
+  //                            map's own "not on the map yet" list
   //   notePlaceAdded(data)  -> where a hand-added place gets written when the
   //                            app is around; without it the engine falls
   //                            back to its own state.dataOverride. The engine
@@ -5206,6 +5327,7 @@
   window.CityOpsApp = {
     exportStandalone: exportStandalone, moreActions: moreActions,
     askPlace: openAskPlaceModal,
+    placePin: openPlacePinModal,
     notePlaceAdded: function (newData) { commitCityData(newData); }
   };
 

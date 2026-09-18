@@ -2131,6 +2131,82 @@ test('a map block draws a canvas even when nothing is placed yet', () => {
   assert.equal(block.mapPayload.fit, false);
 });
 
+test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
+  // 18 of Rob's 35 Istanbul places were searched and are simply not in
+  // OpenStreetMap; 2 more have no address to search on. Query tuning cannot
+  // find a cafe the map does not contain, so the traveler places it himself.
+  const M = C.mapKit;
+  const guide = { schema: 1, city: { name: 'Istanbul', geo: { lat: 41.0082, lng: 28.9784 } },
+    sections: [{ id: 'coffee', label: 'Coffee' }],
+    items: [{ id: 'kronotrop', section: 'coffee', status: 'plan', name: 'Kronotrop', links: [] }] };
+  assert.equal(M.points(guide).points.length, 0, 'fixture must start unplaced');
+  assert.equal(M.points(guide).missing.length, 1);
+
+  const placed = M.placeByHand(guide, 'kronotrop', 41.0369, 28.9857);
+  assert.ok(placed, 'a hand pin was refused');
+  assert.equal(guide.items[0].geo, undefined, 'the input guide was mutated');
+  const pt = M.point(placed.items[0]);
+  assert.deepEqual({ lat: pt.lat, lng: pt.lng }, { lat: 41.0369, lng: 28.9857 });
+  assert.equal(pt.source, 'manual', 'a hand pin must be distinguishable from a guess');
+  assert.equal(M.isHandPlaced(placed.items[0]), true);
+
+  // And it is on the map, marked as the traveler's own.
+  const r = M.points(placed);
+  assert.equal(r.points.length, 1);
+  assert.equal(r.missing.length, 0, 'a hand-placed item is still being reported as missing');
+  assert.equal(r.points[0].byHand, true);
+
+  // The geocoder never touches it again: `missing` is the only list it walks,
+  // and a placed item is not in it. That is what stops a verified-district
+  // guess overwriting the one coordinate we know is right.
+  assert.equal(M.points(placed).missing.filter((m) => m.id === 'kronotrop').length, 0);
+
+  // A nonsense coordinate is still refused: this is a drag on a map, not a
+  // reason to stop validating.
+  assert.equal(M.placeByHand(guide, 'kronotrop', 999, 999), null);
+  assert.equal(M.placeByHand(guide, 'kronotrop', 0, 0), null);
+  assert.equal(M.placeByHand(guide, 'no-such-item', 41, 29), null);
+});
+
+test('a pin dropped in the wrong spot comes back off', () => {
+  const M = C.mapKit;
+  const guide = { schema: 1, city: { name: 'Istanbul' },
+    sections: [{ id: 'coffee', label: 'Coffee' }],
+    items: [{ id: 'k', section: 'coffee', name: 'Kronotrop', links: [] }] };
+  const placed = M.placeByHand(guide, 'k', 41.0369, 28.9857);
+  const cleared = M.clearPoint(placed, 'k');
+  assert.ok(cleared, 'clearing a pin that exists returned nothing');
+  assert.equal(M.point(cleared.items[0]), null);
+  assert.equal(placed.items[0].geo.lat, 41.0369, 'the input guide was mutated');
+  // It goes back to being looked up, which is the whole point of offering it
+  // for a wrong SEARCH result as well as a wrong hand pin.
+  assert.equal(M.points(cleared).missing.length, 1);
+  // Nothing to clear is null, not a silent copy, so the caller can tell the
+  // difference without diffing two guides.
+  assert.equal(M.clearPoint(cleared, 'k'), null);
+  assert.equal(M.clearPoint(cleared, 'nope'), null);
+});
+
+test('the map offers Place it on every real place that is missing', () => {
+  const guide = { schema: 1, city: { name: 'Istanbul' },
+    sections: [{ id: 'coffee', label: 'Coffee' }],
+    items: [
+      { id: 'real', section: 'coffee', status: 'plan', name: 'Kronotrop', links: [] },
+      { id: 'new-slug', section: 'coffee', status: 'plan', name: 'A place to eat', links: [] }
+    ] };
+  const r = C.mapKit.points(guide);
+  assert.equal(r.missing.length, 2);
+  const byId = {};
+  r.missing.forEach((m) => { byId[m.id] = m; });
+  assert.equal(byId['real'].placeholder, false);
+  assert.equal(byId['new-slug'].placeholder, true, 'template filler must not be flagged as a real place');
+
+  const block = C.mapKit.renderBlock(guide, null, {});
+  const buttons = block.querySelectorAll('[data-place-item]');
+  assert.equal(buttons.length, 1, 'Place it must be offered for the real place and not the placeholder');
+  assert.equal(buttons[0].getAttribute('data-place-item'), 'real');
+});
+
 test('a map opens on the city before anything is pinned', () => {
   const withCity = { schema: 1, city: { name: 'Istanbul', geo: { lat: 41.0082, lng: 28.9784 } },
     sections: [], items: [{ id: 'a', section: 'dinner', name: 'X', links: [] }] };

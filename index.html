@@ -2692,12 +2692,13 @@ var CityOps = (function () {
       if (p) {
         points.push({ id: it.id, name: it.name || it.id, section: it.section,
           category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
-          day: it.day || null });
+          byHand: isHandPlaced(it), day: it.day || null });
       } else {
         var why = placeholderReason(it) ? 'looks like example text, not a real place'
           : (geocodeQuery(it, data) ? 'not looked up yet' : 'no address or map link to go on');
         missing.push({ id: it.id, name: it.name || it.id, section: it.section,
-          category: cat, why: why, lookupable: !!geocodeQuery(it, data) });
+          category: cat, why: why, lookupable: !!geocodeQuery(it, data),
+          placeholder: !!placeholderReason(it) });
       }
     });
     return { points: points, missing: missing };
@@ -2718,6 +2719,52 @@ var CityOps = (function () {
         at: new Date().toISOString().slice(0, 10) };
     });
     return found ? out : null;
+  }
+
+  // ---- Placing a pin by hand ----
+  //
+  // 20 of Rob's 35 Istanbul places are not in OpenStreetMap at all: 18 searched
+  // and absent, 2 with no address to search on. No amount of query tuning finds
+  // a cafe the map has never heard of, and the geocoder is right to refuse the
+  // guesses it cannot verify. So the traveler places it himself. He can see the
+  // city, he knows where the place is, and his own pin is better evidence than
+  // anything this app can infer.
+  //
+  // A hand pin needs no protection from the geocoder: itemPoint reads item.geo
+  // first, and mapPoints only reports an item as missing when itemPoint returns
+  // nothing, so a placed item is never looked up again. It rides the normal
+  // sync like any other field.
+  //
+  // NO BOUNDING BOX CHECK HERE, deliberately, and this is the one place that
+  // rule differs from geocodePlan. The geocoder checks its answers against the
+  // city box because it is GUESSING; the traveler is not. He is looking at the
+  // map while he drags. Refusing his pin for sitting outside a padded box would
+  // be the app telling him it knows his trip better than he does, and a day
+  // trip out of the city is an ordinary thing to have in a guide.
+  function placeByHand(data, id, lat, lng) {
+    return cacheGeo(data, id, lat, lng, 'manual');
+  }
+
+  // True for a pin the traveler put there. The shell offers "Move on map"
+  // rather than "Place on map" for these, and says whose pin it is.
+  function isHandPlaced(item) {
+    return !!(item && item.geo && item.geo.source === 'manual');
+  }
+
+  // Take the coordinate off an item: undo for a pin dropped in the wrong spot,
+  // and the only way to send a wrongly cached geocode back for another look.
+  // Returns a new guide, or null if there was nothing to clear, so the caller
+  // can tell "undone" from "nothing to undo" without comparing guides.
+  function clearPoint(data, id) {
+    if (!data || !Array.isArray(data.items)) return null;
+    var had = false;
+    var out = deepClone(data);
+    out.items.forEach(function (it) {
+      if (!it || it.id !== id || !it.geo) return;
+      had = true;
+      delete it.geo;
+    });
+    return had ? out : null;
   }
 
   function setTab(state, tabId) {
@@ -9051,6 +9098,38 @@ var CityOps = (function () {
     return (window.CityOpsApp && window.CityOpsApp.askPlace) ? window.CityOpsApp.askPlace : null;
   }
 
+  function placePinHook() {
+    if (typeof window === 'undefined' || !window) return null;
+    return (window.CityOpsApp && window.CityOpsApp.placePin) ? window.CityOpsApp.placePin : null;
+  }
+
+  // "Place on map" from the card itself.
+  //
+  // Wording, deliberately: this app already has a pin, the one that holds a
+  // card at the top of its section, and isPinned/pinBtn above own that word.
+  // A control that said "Pin" here would mean the other thing to anybody who
+  // has used the first one, so these say "Place on map" and "Move on map" and
+  // never "pin" on their own.
+  //
+  // .ctl-more, behind the card's expand, for the reason written on askBtn: one
+  // more always-visible pill wrapped all 26 control rows on the real Ksamil
+  // guide. Discovery does not depend on this control anyway. The map's own
+  // "not on the map yet" list names every unplaced place and carries the same
+  // action, which is where a traveler looking at a gap actually is.
+  function mapPinBtn(it) {
+    var hook = placePinHook();
+    if (!hook || !it || placeholderReason(it)) return null;
+    var placed = !!itemPoint(it);
+    var b = el('button', 'ctl icon-btn place-btn ctl-more', '📍');
+    b.type = 'button';
+    b.setAttribute('aria-label', placed ? 'Move this place on the map' : 'Place this on the map');
+    b.title = placed
+      ? 'Drag its pin to the right spot'
+      : 'Not on the map. Drop a pin where it actually is';
+    b.onclick = function () { hook(it.id); };
+    return b;
+  }
+
   // Section lookup for a card that only knows its section ID. Rebuilt once per
   // render (see rerender) rather than scanned per card.
   var secById = null;
@@ -9144,6 +9223,8 @@ var CityOps = (function () {
     if (status !== 'archived') {
       var ask = askBtn(it);
       if (ask) ctl.appendChild(ask);
+      var place = mapPinBtn(it);
+      if (place) ctl.appendChild(place);
       var ed = el('button', 'ctl icon-btn ctl-more', '✎');
       ed.type = 'button';
       ed.setAttribute('aria-label', 'Rename');
@@ -9694,6 +9775,18 @@ var CityOps = (function () {
         b.setAttribute('data-goto-item', m.id);
         li.appendChild(b);
         li.appendChild(el('span', 'mapwhy', ' ' + (m.why || '')));
+        // The action, next to the gap it fixes. Offered for anything real:
+        // "not looked up yet" resolves itself in a second, but the 18 Istanbul
+        // places OpenStreetMap has never heard of will sit in this list
+        // forever, and this button is the only thing that ever moves them out
+        // of it. Not offered for placeholder text, which is not a place.
+        if (!m.placeholder) {
+          var pb = el('button', 'linklike place-it', 'Place it');
+          pb.type = 'button';
+          pb.setAttribute('data-place-item', m.id);
+          li.appendChild(el('span', null, ' '));
+          li.appendChild(pb);
+        }
         ul.appendChild(li);
       });
       det.appendChild(ul);
@@ -11597,6 +11690,7 @@ var CityOps = (function () {
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
       cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
+      placeByHand: placeByHand, clearPoint: clearPoint, isHandPlaced: isHandPlaced,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
       renderBlock: renderMapBlock
@@ -14143,12 +14237,13 @@ var CityOps = (function () {
       if (p) {
         points.push({ id: it.id, name: it.name || it.id, section: it.section,
           category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
-          day: it.day || null });
+          byHand: isHandPlaced(it), day: it.day || null });
       } else {
         var why = placeholderReason(it) ? 'looks like example text, not a real place'
           : (geocodeQuery(it, data) ? 'not looked up yet' : 'no address or map link to go on');
         missing.push({ id: it.id, name: it.name || it.id, section: it.section,
-          category: cat, why: why, lookupable: !!geocodeQuery(it, data) });
+          category: cat, why: why, lookupable: !!geocodeQuery(it, data),
+          placeholder: !!placeholderReason(it) });
       }
     });
     return { points: points, missing: missing };
@@ -14169,6 +14264,52 @@ var CityOps = (function () {
         at: new Date().toISOString().slice(0, 10) };
     });
     return found ? out : null;
+  }
+
+  // ---- Placing a pin by hand ----
+  //
+  // 20 of Rob's 35 Istanbul places are not in OpenStreetMap at all: 18 searched
+  // and absent, 2 with no address to search on. No amount of query tuning finds
+  // a cafe the map has never heard of, and the geocoder is right to refuse the
+  // guesses it cannot verify. So the traveler places it himself. He can see the
+  // city, he knows where the place is, and his own pin is better evidence than
+  // anything this app can infer.
+  //
+  // A hand pin needs no protection from the geocoder: itemPoint reads item.geo
+  // first, and mapPoints only reports an item as missing when itemPoint returns
+  // nothing, so a placed item is never looked up again. It rides the normal
+  // sync like any other field.
+  //
+  // NO BOUNDING BOX CHECK HERE, deliberately, and this is the one place that
+  // rule differs from geocodePlan. The geocoder checks its answers against the
+  // city box because it is GUESSING; the traveler is not. He is looking at the
+  // map while he drags. Refusing his pin for sitting outside a padded box would
+  // be the app telling him it knows his trip better than he does, and a day
+  // trip out of the city is an ordinary thing to have in a guide.
+  function placeByHand(data, id, lat, lng) {
+    return cacheGeo(data, id, lat, lng, 'manual');
+  }
+
+  // True for a pin the traveler put there. The shell offers "Move on map"
+  // rather than "Place on map" for these, and says whose pin it is.
+  function isHandPlaced(item) {
+    return !!(item && item.geo && item.geo.source === 'manual');
+  }
+
+  // Take the coordinate off an item: undo for a pin dropped in the wrong spot,
+  // and the only way to send a wrongly cached geocode back for another look.
+  // Returns a new guide, or null if there was nothing to clear, so the caller
+  // can tell "undone" from "nothing to undo" without comparing guides.
+  function clearPoint(data, id) {
+    if (!data || !Array.isArray(data.items)) return null;
+    var had = false;
+    var out = deepClone(data);
+    out.items.forEach(function (it) {
+      if (!it || it.id !== id || !it.geo) return;
+      had = true;
+      delete it.geo;
+    });
+    return had ? out : null;
   }
 
   function setTab(state, tabId) {
@@ -20502,6 +20643,38 @@ var CityOps = (function () {
     return (window.CityOpsApp && window.CityOpsApp.askPlace) ? window.CityOpsApp.askPlace : null;
   }
 
+  function placePinHook() {
+    if (typeof window === 'undefined' || !window) return null;
+    return (window.CityOpsApp && window.CityOpsApp.placePin) ? window.CityOpsApp.placePin : null;
+  }
+
+  // "Place on map" from the card itself.
+  //
+  // Wording, deliberately: this app already has a pin, the one that holds a
+  // card at the top of its section, and isPinned/pinBtn above own that word.
+  // A control that said "Pin" here would mean the other thing to anybody who
+  // has used the first one, so these say "Place on map" and "Move on map" and
+  // never "pin" on their own.
+  //
+  // .ctl-more, behind the card's expand, for the reason written on askBtn: one
+  // more always-visible pill wrapped all 26 control rows on the real Ksamil
+  // guide. Discovery does not depend on this control anyway. The map's own
+  // "not on the map yet" list names every unplaced place and carries the same
+  // action, which is where a traveler looking at a gap actually is.
+  function mapPinBtn(it) {
+    var hook = placePinHook();
+    if (!hook || !it || placeholderReason(it)) return null;
+    var placed = !!itemPoint(it);
+    var b = el('button', 'ctl icon-btn place-btn ctl-more', '📍');
+    b.type = 'button';
+    b.setAttribute('aria-label', placed ? 'Move this place on the map' : 'Place this on the map');
+    b.title = placed
+      ? 'Drag its pin to the right spot'
+      : 'Not on the map. Drop a pin where it actually is';
+    b.onclick = function () { hook(it.id); };
+    return b;
+  }
+
   // Section lookup for a card that only knows its section ID. Rebuilt once per
   // render (see rerender) rather than scanned per card.
   var secById = null;
@@ -20595,6 +20768,8 @@ var CityOps = (function () {
     if (status !== 'archived') {
       var ask = askBtn(it);
       if (ask) ctl.appendChild(ask);
+      var place = mapPinBtn(it);
+      if (place) ctl.appendChild(place);
       var ed = el('button', 'ctl icon-btn ctl-more', '✎');
       ed.type = 'button';
       ed.setAttribute('aria-label', 'Rename');
@@ -21145,6 +21320,18 @@ var CityOps = (function () {
         b.setAttribute('data-goto-item', m.id);
         li.appendChild(b);
         li.appendChild(el('span', 'mapwhy', ' ' + (m.why || '')));
+        // The action, next to the gap it fixes. Offered for anything real:
+        // "not looked up yet" resolves itself in a second, but the 18 Istanbul
+        // places OpenStreetMap has never heard of will sit in this list
+        // forever, and this button is the only thing that ever moves them out
+        // of it. Not offered for placeholder text, which is not a place.
+        if (!m.placeholder) {
+          var pb = el('button', 'linklike place-it', 'Place it');
+          pb.type = 'button';
+          pb.setAttribute('data-place-item', m.id);
+          li.appendChild(el('span', null, ' '));
+          li.appendChild(pb);
+        }
         ul.appendChild(li);
       });
       det.appendChild(ul);
@@ -23048,6 +23235,7 @@ var CityOps = (function () {
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
       cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
+      placeByHand: placeByHand, clearPoint: clearPoint, isHandPlaced: isHandPlaced,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
       renderBlock: renderMapBlock
@@ -25400,6 +25588,9 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     blocks.forEach(function (b) {
       b.querySelectorAll('[data-goto-item]').forEach(function (btn) {
         btn.onclick = function () { gotoItem(btn.getAttribute('data-goto-item')); };
+      });
+      b.querySelectorAll('[data-place-item]').forEach(function (btn) {
+        btn.onclick = function () { openPlacePinModal(btn.getAttribute('data-place-item')); };
       });
     });
     // The card's own way back to the map, drawn on every card that can be
@@ -28759,6 +28950,122 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     return { wrap: wrap, box: box, close: function () { wrap.remove(); } };
   }
 
+  // ---- Drop a pin yourself ----
+  //
+  // The end of the road for a place no search can find. Measured on Rob's live
+  // Istanbul guide 2026-09-17: of 35 places, 15 placed, 18 searched and simply
+  // not in OpenStreetMap, 2 with no address text to search on. The geocoder is
+  // already doing the right thing by refusing answers it cannot verify against
+  // the district, because a pin on the wrong branch of a chain costs an evening
+  // and a missing pin costs a glance at the list. But refusing is not finding,
+  // and those 18 were never going to resolve themselves.
+  //
+  // So the traveler places it. He is standing in the city, he knows where the
+  // place is, and one tap on a map he can see beats every heuristic in this
+  // file. His pin is stored with source 'manual' and is never looked up again.
+  function openPlacePinModal(id) {
+    if (!activeId || !has(store.cities, activeId)) return;
+    function freshData() {
+      return CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+    }
+    var data = freshData();
+    var item = (data.items || []).filter(function (x) { return x && x.id === id; })[0];
+    if (!item) return;
+    var existing = CityOps.mapKit.point(item);
+    var byHand = CityOps.mapKit.isHandPlaced(item);
+    var name = item.name || 'this place';
+
+    var m = modalShell((existing ? 'Move ' : 'Place ') + name);
+    m.box.appendChild(el('p', 'diff', existing
+      ? (byHand
+        ? 'Your own pin. Drag it, or tap the map, to move it.'
+        : 'This pin came from a search. If it is on the wrong building, tap where it really is: your pin wins from then on.')
+      : 'Nothing could look this one up, so it is not on the map. Tap the map where it actually is, then save.'));
+
+    var canvas = el('div', 'mapcanvas place-canvas');
+    canvas.style.height = '300px';
+    m.box.appendChild(canvas);
+    var msg = el('div', 'diff', '');
+    m.box.appendChild(msg);
+
+    var picked = existing ? { lat: existing.lat, lng: existing.lng } : null;
+    var row = el('div', 'mrow');
+    var save = el('button', 'ctl to-done', 'Save this spot');
+    save.type = 'button';
+    save.disabled = !picked;
+    save.onclick = function () {
+      if (!picked) return;
+      var next = CityOps.mapKit.placeByHand(freshData(), id, picked.lat, picked.lng);
+      m.close();
+      if (next) { commitCityData(next); setTimeout(function () { gotoItem(id); }, 0); }
+    };
+    row.appendChild(save);
+    if (existing) {
+      var drop = el('button', 'ctl', 'Remove pin');
+      drop.type = 'button';
+      drop.title = byHand
+        ? 'Take your pin off. The place stays in the guide.'
+        : 'Take this pin off and let it be looked up again.';
+      drop.onclick = function () {
+        var next = CityOps.mapKit.clearPoint(freshData(), id);
+        m.close();
+        if (next) commitCityData(next);
+      };
+      row.appendChild(drop);
+    }
+    var cancel = el('button', 'ctl', 'Cancel');
+    cancel.type = 'button';
+    cancel.onclick = function () { m.close(); };
+    row.appendChild(cancel);
+    m.box.appendChild(row);
+
+    // The map itself. Everything above works as a dialog whether or not
+    // Leaflet arrives; only the picking needs it, so that is the only part
+    // that waits, and a failure says so in words instead of showing a grey box.
+    msg.textContent = 'Loading the map...';
+    leafletWanted = true;
+    loadLeaflet().then(function (L) {
+      if (!L) {
+        msg.textContent = 'The map could not load, so there is nothing to tap. ' +
+          'This needs a connection once; everything else in the guide works offline.';
+        return;
+      }
+      msg.textContent = '';
+      var start = picked || CityOps.mapKit.cityCenter(data);
+      var map = L.map(canvas, { scrollWheelZoom: false })
+        .setView(start ? [start.lat, start.lng] : [20, 0], start ? (picked ? 16 : 13) : 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }).addTo(map);
+      if (!start) {
+        msg.textContent = 'This city has no coordinates yet, so the map opens on the world. ' +
+          'Zoom to the city and tap the spot.';
+      }
+      var mark = null;
+      function put(lat, lng) {
+        picked = { lat: lat, lng: lng };
+        save.disabled = false;
+        if (mark) { mark.setLatLng([lat, lng]); return; }
+        mark = L.marker([lat, lng], {
+          icon: pinIcon(L, CityOps.mapKit.color(CityOps.mapKit.category({ id: item.section }))),
+          draggable: true
+        }).addTo(map);
+        mark.on('dragend', function () {
+          var ll = mark.getLatLng();
+          picked = { lat: ll.lat, lng: ll.lng };
+        });
+      }
+      if (picked) put(picked.lat, picked.lng);
+      map.on('click', function (e) { put(e.latlng.lat, e.latlng.lng); });
+      // Leaflet measures its container on creation, and this one was display:
+      // none until the modal opened one tick ago. Without this the tiles draw
+      // into a zero-width box and the map looks broken on a phone.
+      setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, 0);
+    });
+  }
+
   function openSignInModal() {
     var m = modalShell('Sign in to sync');
     m.box.appendChild(el('p', 'diff', 'Your cities and your progress follow you to your other devices. ' +
@@ -28907,6 +29214,8 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // CityOpsApp at all) simply never shows a button that has nothing behind
   // it: no Claude key, no embedded PROMPT.md, no canonical city record.
   //   askPlace(id)         -> the ✨ on an un-researched card
+  //   placePin(id)         -> the 📍 on a card, and every "Place it" in a
+  //                            map's own "not on the map yet" list
   //   notePlaceAdded(data)  -> where a hand-added place gets written when the
   //                            app is around; without it the engine falls
   //                            back to its own state.dataOverride. The engine
@@ -28916,6 +29225,7 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   window.CityOpsApp = {
     exportStandalone: exportStandalone, moreActions: moreActions,
     askPlace: openAskPlaceModal,
+    placePin: openPlacePinModal,
     notePlaceAdded: function (newData) { commitCityData(newData); }
   };
 
