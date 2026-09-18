@@ -8608,12 +8608,18 @@ var CityOps = (function () {
       main.appendChild(el('p', 'when-line', 'Nothing in this tab yet.'));
       return;
     }
+    // tabItemsFlat is the ONE accessor that knows a section view-model's shape:
+    // `days` each holding items, plus `undated`. #44 guessed at `groups` and
+    // `entries`, which this view-model has never had, so tabItems was always
+    // empty and NO category tab has ever shown a map. Proven headless on the
+    // Istanbul fixture 2026-09-18: Eat & Drink 8 cards and 0 map blocks, Do 3
+    // and 0, Services 3 and 0, while Plan drew fine.
+    //
+    // Reusing the same function the cards are built from is what stops the map
+    // and the list disagreeing about what is in this tab.
     var tabItems = [];
     vms.forEach(function (sv) {
-      (sv.groups || []).forEach(function (g) {
-        (g.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
-      });
-      (sv.entries || []).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
+      tabItemsFlat(sv, state).forEach(function (e) { if (e && e.it) tabItems.push(e.it); });
     });
     var tabMap = tabItems.length
       ? renderMapBlock(effectiveData(ctx.base, state), tabItems,
@@ -8673,6 +8679,19 @@ var CityOps = (function () {
       main.appendChild(el('p', 'when-line', 'Nothing in this tab yet.'));
       return;
     }
+    // Info gets a map too. Its sections hold ATMs, pharmacies, SIM shops and
+    // transport: reference material, which is exactly the kind a traveler
+    // wants to see the position of rather than read the address of.
+    var infoItems = [];
+    vms.forEach(function (sv) {
+      sv.days.forEach(function (d) { d.items.forEach(function (it) { infoItems.push(it); }); });
+      sv.undated.forEach(function (it) { infoItems.push(it); });
+    });
+    var infoMap = infoItems.length
+      ? renderMapBlock(effectiveData(ctx.base, state), infoItems,
+          { height: 220, label: 'Map of these places' })
+      : null;
+    if (infoMap) main.appendChild(infoMap);
     var xall = sectionExpandAllRow(vms, totalItems);
     if (xall) main.appendChild(xall);
     vms.forEach(function (sv) {
