@@ -1,6 +1,7 @@
 // node tools/assemble.js  : rebuilds template.html and index.html from src/
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const root = path.join(__dirname, '..');
 const engine = fs.readFileSync(path.join(root, 'src', 'cityops.js'), 'utf8');
 
@@ -216,3 +217,33 @@ if (fs.existsSync(path.join(root, 'src', 'app-shell.html'))) {
       .replace('<!--CITYOPS_PROMPT-->', () => promptTemplateBlock());
   });
 }
+
+
+// ---- the service worker's cache name, stamped from the build ----
+//
+// This is why Rob could not see the maps on the morning of 2026-09-18. sw.js
+// said `cityops-app-v21` and had said so since commit e335506, which predates
+// EVERY release from #34 to #45. The comment on line 1 of that file says to
+// bump it on each release and nobody ever did, including me: I flagged it on
+// 09-06, wrote "flagged, not touched" in the #38 PR body, and left it.
+//
+// A number a human has to remember to change is a number that does not change.
+// So it is derived from the shell itself: any byte that differs in index.html
+// or the trip surface produces a different cache name, the installed app sees a
+// genuinely new service worker, activate deletes the old cache, and the new
+// shell is what opens. A release that changes nothing keeps its name and costs
+// installed apps nothing.
+function stampServiceWorker() {
+  const swPath = path.join(root, 'sw.js');
+  const sw = fs.readFileSync(swPath, 'utf8');
+  const shell = ['index.html', 'trip/index.html', 'share/index.html']
+    .map((f) => {
+      try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { return ''; }
+    }).join('');
+  const stamp = crypto.createHash('sha256').update(shell).digest('hex').slice(0, 12);
+  const next = sw.replace(/var CACHE = '[^']*';/, "var CACHE = 'cityops-app-" + stamp + "';");
+  if (next !== sw) fs.writeFileSync(swPath, next);
+  return stamp;
+}
+const swStamp = stampServiceWorker();
+console.log('service worker cache: cityops-app-' + swStamp);
