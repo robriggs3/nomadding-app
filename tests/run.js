@@ -2101,6 +2101,90 @@ test('the service worker cache name changes when the shell changes', () => {
     'sw.js was not re-stamped for this shell: run node tools/assemble.js');
 });
 
+test('a map block draws a canvas even when nothing is placed yet', () => {
+  // THE BUG THAT HID THE MAP FROM ROB FOR TWO DAYS.
+  //
+  // The canvas used to be created only when at least one item already had a
+  // coordinate, and the shell only loaded Leaflet for blocks that had one. A
+  // fresh city has no cached coordinates, so: no points, no canvas, no
+  // Leaflet, and the geocoder never ran because it was called after the
+  // loader. No pins, forever, on every city nobody had already mapped.
+  // Reproduced headless on the live app 2026-09-18: mapblock 1, canvases 0,
+  // leaflet-container 0, markers 0, nominatim requests 0.
+  const nothingPlaced = { schema: 1,
+    city: { name: 'Istanbul', country: 'TUR', dates: { from: '2026-09-16', to: '2026-09-25' } },
+    sections: [{ id: 'dinner', label: 'Dinner' }],
+    items: [{ id: 'a', section: 'dinner', status: 'plan', name: 'Ciya', links: [{ kind: 'map',
+      href: 'https://www.google.com/maps/search/?api=1&query=Ciya+Istanbul' }] }] };
+  const r = C.mapKit.points(nothingPlaced);
+  assert.equal(r.points.length, 0, 'this fixture must have nothing placed, or it proves nothing');
+  assert.equal(r.missing.length, 1);
+
+  const block = C.mapKit.renderBlock(nothingPlaced, null, { height: 200 });
+  assert.ok(block, 'no block at all for a city with items');
+  // A canvas, so the shell has something to draw into and something to load
+  // Leaflet FOR.
+  assert.ok(block.mapPayload, 'the block carries no payload, so the shell skips it entirely');
+  assert.equal(block.mapPayload.points.length, 0);
+  assert.equal(block.mapPayload.missing, 1);
+  // And it must not try to fit bounds it does not have.
+  assert.equal(block.mapPayload.fit, false);
+});
+
+test('a map opens on the city before anything is pinned', () => {
+  const withCity = { schema: 1, city: { name: 'Istanbul', geo: { lat: 41.0082, lng: 28.9784 } },
+    sections: [], items: [{ id: 'a', section: 'dinner', name: 'X', links: [] }] };
+  assert.deepEqual(C.mapKit.cityCenter(withCity), { lat: 41.0082, lng: 28.9784 });
+  const block = C.mapKit.renderBlock(withCity, null, {});
+  assert.deepEqual(block.mapPayload.center, { lat: 41.0082, lng: 28.9784 },
+    'a map with no pins has nowhere to open, so it opens on the Atlantic');
+  // Unknown city: no centre, and that is allowed. The shell falls back to a
+  // world view rather than refusing to draw.
+  const noCity = { schema: 1, city: { name: 'Istanbul' }, sections: [],
+    items: [{ id: 'a', section: 'dinner', name: 'X', links: [] }] };
+  assert.equal(C.mapKit.cityCenter(noCity), null);
+  // And the city coordinate caches like an item's, so it is looked up once.
+  const cached = C.mapKit.cacheCityGeo(noCity, 41.0082, 28.9784);
+  assert.deepEqual(C.mapKit.cityCenter(cached), { lat: 41.0082, lng: 28.9784 });
+  assert.equal(noCity.city.geo, undefined, 'the input was mutated');
+  assert.equal(C.mapKit.cacheCityGeo(noCity, 999, 999), null);
+});
+
+test('the shell loads Leaflet and geocodes even with nothing placed', () => {
+  // The other half of the same bug, in the shell: `if (!live.length) return;`
+  // sat BEFORE both the loader and the geocoder, and `live` was the blocks
+  // that already had a point. This drives the shipped drawMaps with a block
+  // that has none and asserts both still happen.
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function drawMaps(');
+  assert.ok(start !== -1, 'drawMaps is missing from the assembled app');
+  const end = html.indexOf('\n  }\n', start);
+  const src = html.slice(start, end + 4);
+
+  let loaded = 0, geocoded = 0;
+  const blocks = [{
+    mapPayload: null,                       // nothing placed, exactly Rob's city
+    querySelectorAll: function () { return []; }
+  }];
+  // Selector-aware: only the .mapblock query returns the block, so the
+  // show-on-map pass over [data-mappable] does not get handed map blocks.
+  const doc = { querySelectorAll: function (sel) {
+    return String(sel).indexOf('mapblock') !== -1 ? blocks : [];
+  } };
+  const fn = new Function('document', 'loadLeaflet', 'geocodeMissing', 'gotoItem', 'el', 'Node',
+    'var leafletWanted = false;\n' + src + '\nreturn drawMaps;');
+  fn(doc,
+    function () { loaded++; return { then: function () { return { then: function () {} }; } }; },
+    function () { geocoded++; },
+    function () {}, function () { return { appendChild: function () {}, setAttribute: function () {} }; },
+    { DOCUMENT_POSITION_FOLLOWING: 4 })();
+
+  assert.equal(geocoded, 1,
+    'a city with nothing placed never starts geocoding, so it can never get a pin');
+});
+
 test('a wrong pin is refused, even when it is in the right city', () => {
   const M = C.mapKit;
   const bbox = [40.846, 41.166, 28.816, 29.136];   // Istanbul, from Nominatim

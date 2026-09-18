@@ -1698,6 +1698,12 @@
       var row = card.querySelector('.card-ctl') || card;
       row.appendChild(b);
     });
+    // GEOCODING STARTS REGARDLESS OF LEAFLET, and regardless of whether
+    // anything is placed yet. This ordering is the bug that hid the map for two
+    // days: it used to sit inside the loader's .then, behind an early return
+    // that fired whenever no item had a coordinate, which is every fresh city.
+    // No pins meant no map meant no lookups meant no pins.
+    geocodeMissing();
     if (!live.length) return;
     leafletWanted = true;
     loadLeaflet().then(function (L) {
@@ -1716,6 +1722,19 @@
           }).addTo(map);
           var bounds = [];
           var marks = {};
+          b.mapAddPin = function (p) {
+            try {
+              var mk2 = L.circleMarker([p.lat, p.lng], {
+                radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
+              }).addTo(map);
+              mk2.bindTooltip(p.name, { direction: 'top' });
+              mk2.on('click', function () { gotoItem(p.id); });
+              marks[p.id] = mk2;
+              bounds.push([p.lat, p.lng]);
+              if (bounds.length === 1) map.setView(bounds[0], 14);
+              else map.fitBounds(bounds, { padding: [24, 24] });
+            } catch (e) { /* one pin is never worth the page */ }
+          };
           pay.points.forEach(function (p) {
             var mk = L.circleMarker([p.lat, p.lng], {
               radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
@@ -1725,7 +1744,13 @@
             marks[p.id] = mk;
             bounds.push([p.lat, p.lng]);
           });
-          if (bounds.length === 1) map.setView(bounds[0], 15);
+          if (!bounds.length) {
+            // Nothing placed yet: open on the city if we know where it is, and
+            // otherwise sit at a world view until the first pin lands. Either
+            // way the traveler sees a map rather than a blank strip.
+            if (pay.center) map.setView([pay.center.lat, pay.center.lng], 12);
+            else map.setView([20, 0], 2);
+          } else if (bounds.length === 1) map.setView(bounds[0], 15);
           else map.fitBounds(bounds, { padding: [24, 24] });
           b.mapFlash = function (id) {
             var hit = marks[id];
@@ -1781,6 +1806,21 @@
     if (!todo.length) return;
     geocoding = true;
     var i = 0;
+    // The CITY first, once, so a map with nothing on it still opens where the
+    // traveler is rather than on the Atlantic.
+    function ensureCityCenter(next) {
+      var d0 = CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+      if (CityOps.mapKit.cityCenter(d0) || !d0.city || !d0.city.name) { next(); return; }
+      geocodeOne(d0.city.name + (d0.city.country ? ', ' + d0.city.country : ''))
+        .then(function (pt) {
+          if (pt) {
+            var withCity = CityOps.mapKit.cacheCityGeo(d0, pt.lat, pt.lng);
+            if (withCity) commitCityData(withCity);
+          }
+          setTimeout(next, GEO_GAP_MS);
+        });
+    }
     // Say what is happening. The first open of a city does 30-odd lookups at
     // one a second, and a map that is empty for half a minute with no words on
     // it reads as a map that is broken.
@@ -1817,7 +1857,7 @@
         setTimeout(step, GEO_GAP_MS);
       });
     }
-    step();
+    ensureCityCenter(step);
   }
 
   function commitCityData(newData) {

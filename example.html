@@ -9458,13 +9458,44 @@ var CityOps = (function () {
   // what it could not place, and the page around it is untouched.
   var mapSeq = 0;
 
+  // Where to open a map that has nothing on it yet: the city's own coordinate
+  // once it is known, cached on `city.geo` the same way an item's is.
+  function cityCenter(data) {
+    var c = data && data.city && data.city.geo;
+    if (!c) return null;
+    var ok = okLatLng(Number(c.lat), Number(c.lng));
+    return ok ? { lat: ok.lat, lng: ok.lng } : null;
+  }
+
+  function cacheCityGeo(data, lat, lng) {
+    var ok = okLatLng(Number(lat), Number(lng));
+    if (!data || !data.city || !ok) return null;
+    var out = deepClone(data);
+    out.city.geo = { lat: ok.lat, lng: ok.lng, source: 'nominatim',
+      at: new Date().toISOString().slice(0, 10) };
+    return out;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
     var r = mapPoints(data, items);
     var wrap = el('div', 'mapblock');
     if (!r.points.length && !r.missing.length) return null;
 
-    if (r.points.length) {
+    // ALWAYS a canvas, even with nothing placed yet.
+    //
+    // This is the bug that hid the map from Rob for two days. The canvas used
+    // to be drawn only `if (r.points.length)`, and the shell only loaded
+    // Leaflet for blocks that had one. A fresh city has no cached coordinates,
+    // so: no points, no canvas, no Leaflet, and the geocoder never started
+    // because it was called after the loader. No pins, forever, on every city
+    // anybody had not already mapped. Reproduced headless on the live app,
+    // 2026-09-18: mapblock 1, canvases 0, leaflet-container 0, markers 0,
+    // nominatim requests 0.
+    //
+    // A map with no pins yet is still a map: it shows the city, it says what
+    // it is doing, and the pins arrive as they resolve.
+    {
       var id = 'map-' + (++mapSeq);
       var canvas = el('div', 'mapcanvas');
       canvas.id = id;
@@ -9475,7 +9506,8 @@ var CityOps = (function () {
       canvas.setAttribute('aria-label', o.label || 'Map of these places');
       wrap.appendChild(canvas);
       // What the shell needs to draw into it, without re-deriving any of it.
-      wrap.mapPayload = { id: id, points: r.points, fit: true };
+      wrap.mapPayload = { id: id, points: r.points, fit: r.points.length > 0,
+        center: cityCenter(data), missing: r.missing.length };
 
       if (o.legend !== false) {
         var seen = {};
@@ -11389,6 +11421,7 @@ var CityOps = (function () {
       categories: mapCategories, category: mapCategory, color: mapColor,
       parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
