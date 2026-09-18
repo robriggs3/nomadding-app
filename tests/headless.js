@@ -157,6 +157,79 @@ async function open(browser, city, opts) {
     assert.equal(d.errors.length, 0, d.errors.join(' | '));
   });
 
+  // 5. The traveler places a pin himself, end to end, in a real browser.
+  //
+  // Daisy Laundry is in the PLACED fixture precisely because nothing can look
+  // it up: no geo, no map link. That is the shape of 18 of Rob's 35 Istanbul
+  // places, and until now it was permanent. This walks the whole way: the
+  // "Place it" button in the map's own missing list, the picker map, a tap, a
+  // save, and the pin surviving the re-render as the traveler's own.
+  const e = await open(browser, PLACED);
+  const before = await e.page.evaluate(() => ({
+    markers: document.querySelectorAll('.leaflet-marker-icon').length,
+    placeButtons: document.querySelectorAll('[data-place-item]').length,
+    daisy: document.querySelectorAll('[data-place-item="daisy"]').length
+  }));
+  check('the map offers Place it on the one place nothing can look up', () => {
+    assert.equal(before.daisy, 1, 'no Place it for Daisy Laundry: ' + JSON.stringify(before));
+  });
+
+  // The list is a collapsed <details>, so open it the way a traveler does:
+  // the summary already says "1 place is not on the map yet".
+  await e.page.evaluate(() => {
+    document.querySelectorAll('details.mapmissing').forEach((d) => { d.open = true; });
+  });
+  await e.page.waitForTimeout(200);
+  await e.page.click('[data-place-item="daisy"]');
+  await e.page.waitForTimeout(3000);
+  const picker = await e.page.evaluate(() => ({
+    modal: document.querySelectorAll('.modal').length,
+    canvas: document.querySelectorAll('.place-canvas').length,
+    drawn: document.querySelectorAll('.place-canvas.leaflet-container').length,
+    saveDisabled: !!(document.querySelector('.modal .to-done') || {}).disabled
+  }));
+  check('Place it opens a picker map with Save held back until a spot is chosen', () => {
+    assert.equal(picker.modal, 1, JSON.stringify(picker));
+    assert.equal(picker.canvas, 1, JSON.stringify(picker));
+    assert.ok(picker.drawn >= 1, 'the picker never drew a map: ' + JSON.stringify(picker));
+    assert.equal(picker.saveDisabled, true,
+      'Save was offered before a spot was picked, so an empty tap would write a pin');
+  });
+
+  const box = await e.page.locator('.place-canvas').boundingBox();
+  await e.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await e.page.waitForTimeout(600);
+  await e.page.click('.modal .to-done');
+  await e.page.waitForTimeout(3000);
+  const after = await e.page.evaluate(() => {
+    let stored = null;
+    try {
+      const raw = JSON.parse(localStorage.getItem('cityops.app.v1') || '{}');
+      const city = raw.cities && raw.cities['istanbul-2026-09-16'];
+      const it = ((city && city.items) || []).filter((x) => x && x.id === 'daisy')[0];
+      stored = it && it.geo ? { source: it.geo.source, lat: it.geo.lat, lng: it.geo.lng } : null;
+    } catch (err) {}
+    return {
+      markers: document.querySelectorAll('.leaflet-marker-icon').length,
+      modal: document.querySelectorAll('.modal').length,
+      stillMissing: document.querySelectorAll('[data-place-item="daisy"]').length,
+      stored: stored
+    };
+  });
+  check('a hand-placed pin is saved, drawn, and marked as the traveler own', () => {
+    assert.equal(after.modal, 0, 'the picker did not close on save');
+    assert.ok(after.stored, 'nothing was written to the guide: ' + JSON.stringify(after));
+    assert.equal(after.stored.source, 'manual',
+      'a hand pin was stored as a guess, so the geocoder could overwrite it later');
+    assert.ok(after.markers > before.markers,
+      'the pin was saved but never drawn: ' + JSON.stringify({ before: before.markers, after: after }));
+    assert.equal(after.stillMissing, 0,
+      'the place is pinned and still listed as not on the map');
+  });
+  check('the place-a-pin walk logged no page errors', () => {
+    assert.equal(e.errors.length, 0, e.errors.join(' | '));
+  });
+
   await browser.close();
   console.log(failed ? failed + ' headless check(s) failed' : 'all headless checks passed');
   process.exit(failed ? 1 : 0);
