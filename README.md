@@ -104,6 +104,19 @@ instead of eleven screens down the Info tab.
 
 ## Engineering notes, briefly
 
+**Run `tools/verify.sh` before opening a PR; paste its last line in the PR
+body.** It runs the unit suite, the build, the drift guard and the headless
+browser checks, prints one line per stage, and exits non-zero on any failure.
+Only the headless stage needs a network: `VERIFY_SKIP_HEADLESS=1` skips it with
+a visible SKIP line.
+
+On a shared machine run it through the build lock, so the browser and bundler
+stages queue instead of competing for memory:
+
+```
+~/bin/build-lock.sh tools/verify.sh
+```
+
 The short version of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):
 
 - ~2,000-line dependency-free engine + app shell, assembled into
