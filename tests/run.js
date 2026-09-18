@@ -2077,6 +2077,30 @@ test('marker colours follow the tabs a traveler already knows', () => {
   assert.ok(/^#[0-9a-f]{6}$/i.test(M.color('nonsense')));
 });
 
+test('the service worker cache name changes when the shell changes', () => {
+  // The defect that hid the maps from Rob for seven hours: sw.js carried a
+  // hand-written version that had not moved since e335506, twelve releases
+  // earlier, so an installed app never saw a new worker and never dropped its
+  // old shell.
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  const stamp = /var CACHE = 'cityops-app-([0-9a-f]{12})';/.exec(sw);
+  assert.ok(stamp, 'no build stamp in sw.js');
+
+  // It has to be the stamp of THIS shell, or the guard is decorative: rebuild
+  // the hash the assembler computes and compare.
+  const crypto = require('crypto');
+  const shell = ['index.html', 'trip/index.html', 'share/index.html']
+    .map(function (f) {
+      try { return fs.readFileSync(path.join(root, f), 'utf8'); } catch (e) { return ''; }
+    }).join('');
+  const want = crypto.createHash('sha256').update(shell).digest('hex').slice(0, 12);
+  assert.equal(stamp[1], want,
+    'sw.js was not re-stamped for this shell: run node tools/assemble.js');
+});
+
 test('a wrong pin is refused, even when it is in the right city', () => {
   const M = C.mapKit;
   const bbox = [40.846, 41.166, 28.816, 29.136];   // Istanbul, from Nominatim
@@ -5081,7 +5105,20 @@ test('the service worker precaches the share shell and nothing token-shaped', ()
   // v17: the subscription gates. A phone still serving v16 would let a lapsed
   // account tap sync, one-tap AI and Publish with no explanation attached to
   // any of them, and then watch the database refuse all three in silence.
-  assert.ok(/var CACHE = 'cityops-app-v21';/.test(sw));
+  // REWRITTEN 2026-09-18, not deleted. This used to pin the literal
+  // 'cityops-app-v21', and the whole comment block above is a list of releases
+  // whose author remembered to bump it. Then twelve releases went by and
+  // nobody did, including me: #34 through #45 all shipped on v21, and on the
+  // morning of 09-18 Rob opened the app in Istanbul and the maps were not
+  // there because his installed shell was seven hours stale.
+  //
+  // A number a human has to remember to change is a number that does not
+  // change. It is a build stamp now, derived from the shell itself by
+  // tools/assemble.js, so the invariant worth pinning is that it LOOKS like
+  // one and is not the frozen literal.
+  assert.ok(/var CACHE = 'cityops-app-[0-9a-f]{12}';/.test(sw),
+    'the cache name is not a build stamp: ' + (/var CACHE = '[^']*'/.exec(sw) || [''])[0]);
+  assert.equal(/cityops-app-v21/.test(sw), false, 'the frozen v21 name came back');
   // GET only, so the rpc POST that carries the token is never cached, and a
   // rotated share cannot keep answering out of a stale cache.
   assert.ok(/if \(e\.request\.method !== 'GET'\) return;/.test(sw));

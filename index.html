@@ -863,6 +863,18 @@
 .leaflet-container { font: inherit; }
 .leaflet-control-attribution { font-size: 10px; }
 
+/* The "a newer version is ready" bar. Fixed to the bottom so it never covers
+   the header a traveler is reading, and never auto-reloads: a page pulled out
+   from under somebody mid-edit is worse than a stale one. */
+.updatebar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--card, #fff);
+  border-top: 1px solid var(--line, #dbe4e3);
+  box-shadow: 0 -2px 10px rgba(16,34,42,.08); font-size: 14px;
+}
+.mapprogress { margin: 0 0 8px; font-size: 13px; }
+
   /* --- app shell: multi-city switcher (index.html only) --- */
   /* Dense in-header controls: the h1 itself is the switcher trigger (chevron
      appended after it), and a translucent chip in the header's top-right opens
@@ -12441,6 +12453,18 @@ CityOps.init();
    rather than shrinking it out of sight. */
 .leaflet-container { font: inherit; }
 .leaflet-control-attribution { font-size: 10px; }
+
+/* The "a newer version is ready" bar. Fixed to the bottom so it never covers
+   the header a traveler is reading, and never auto-reloads: a page pulled out
+   from under somebody mid-edit is worse than a stale one. */
+.updatebar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--card, #fff);
+  border-top: 1px solid var(--line, #dbe4e3);
+  box-shadow: 0 -2px 10px rgba(16,34,42,.08); font-size: 14px;
+}
+.mapprogress { margin: 0 0 8px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -25349,8 +25373,27 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     if (!todo.length) return;
     geocoding = true;
     var i = 0;
+    // Say what is happening. The first open of a city does 30-odd lookups at
+    // one a second, and a map that is empty for half a minute with no words on
+    // it reads as a map that is broken.
+    function progress(done, total) {
+      document.querySelectorAll('.mapblock').forEach(function (b) {
+        var n = b.querySelector('.mapprogress');
+        if (!n) {
+          n = el('p', 'mapprogress diff', '');
+          b.insertBefore(n, b.firstChild);
+        }
+        n.textContent = done >= total
+          ? ''
+          : 'Placing ' + total + ' places on the map, ' + done + ' done. ' +
+            'This happens once: after that they are saved with the guide.';
+        if (done >= total && n.parentNode) n.parentNode.removeChild(n);
+      });
+    }
+    progress(0, todo.length);
     function step() {
-      if (i >= todo.length) { geocoding = false; return; }
+      if (i >= todo.length) { geocoding = false; progress(todo.length, todo.length); return; }
+      progress(i, todo.length);
       var m = todo[i++];
       var fresh = CityOps.effectiveData(store.cities[activeId],
         CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
@@ -28878,8 +28921,55 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     if (!('serviceWorker' in navigator)) return;
     if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
     try {
-      navigator.serviceWorker.register('./sw.js');
+      navigator.serviceWorker.register('./sw.js').then(function (reg) {
+        // AN UPDATE THE TRAVELER IS TOLD ABOUT.
+        //
+        // On 2026-09-18 Rob opened the app in Istanbul and the maps were not
+        // there. They had been live for seven hours. His installed app was
+        // still serving the shell it cached, and nothing on screen said a
+        // newer one existed, so there was nothing he could have done about it.
+        // An app that updates silently is fine until it does not update, and
+        // then it is an app with no way out.
+        reg.addEventListener('updatefound', function () {
+          var sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            // `controller` present means this is a REPLACEMENT, not the first
+            // install: on a first install there is nothing to reload into.
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateBanner();
+            }
+          });
+        });
+      });
+      // A shell that activated while the page was open (another tab, or the
+      // worker claiming clients) is the same situation from the other side.
+      var reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (reloaded) return;
+        reloaded = true;
+        showUpdateBanner();
+      });
     } catch (e) {}
+  }
+
+  // Deliberately a banner and not an automatic reload: a traveler mid-edit
+  // should not have the page pulled out from under them, and a reload they
+  // pressed is one they can time.
+  function showUpdateBanner() {
+    if (document.getElementById('update-banner')) return;
+    var bar = el('div', 'updatebar');
+    bar.id = 'update-banner';
+    bar.appendChild(el('span', null, 'A newer version of Nomadding is ready.'));
+    var go = el('button', 'ctl to-done', 'Reload');
+    go.type = 'button';
+    go.onclick = function () { try { location.reload(); } catch (e) {} };
+    bar.appendChild(go);
+    var later = el('button', 'ctl', 'Later');
+    later.type = 'button';
+    later.onclick = function () { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+    bar.appendChild(later);
+    document.body.appendChild(bar);
   }
 
   start();
