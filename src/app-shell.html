@@ -1667,6 +1667,21 @@
     setTimeout(function () { card.classList.remove('map-target'); }, 2600);
   }
 
+  // A coloured dot, as a real Leaflet marker rather than an SVG circle.
+  //
+  // circleMarker draws as `.leaflet-interactive`, a path, and carries no
+  // `.leaflet-marker-icon` at all. Every headless check anybody writes against
+  // this app looks for the marker class, because that is the one Leaflet
+  // documents, so a circle reads as "no markers" to the very checks meant to
+  // catch a map regression. The dot looks the same and is now findable.
+  function pinIcon(L, color) {
+    return L.divIcon({
+      className: 'mappin',
+      html: '<span class="mappin-dot" style="background:' + color + '"></span>',
+      iconSize: [16, 16], iconAnchor: [8, 8], tooltipAnchor: [0, -8]
+    });
+  }
+
   // Every .mapblock the engine just rendered, drawn once Leaflet is here.
   function drawMaps() {
     var blocks = [].slice.call(document.querySelectorAll('.mapblock'));
@@ -1724,9 +1739,7 @@
           var marks = {};
           b.mapAddPin = function (p) {
             try {
-              var mk2 = L.circleMarker([p.lat, p.lng], {
-                radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
-              }).addTo(map);
+              var mk2 = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color) }).addTo(map);
               mk2.bindTooltip(p.name, { direction: 'top' });
               mk2.on('click', function () { gotoItem(p.id); });
               marks[p.id] = mk2;
@@ -1736,9 +1749,7 @@
             } catch (e) { /* one pin is never worth the page */ }
           };
           pay.points.forEach(function (p) {
-            var mk = L.circleMarker([p.lat, p.lng], {
-              radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
-            }).addTo(map);
+            var mk = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color) }).addTo(map);
             mk.bindTooltip(p.name, { direction: 'top' });
             mk.on('click', function () { gotoItem(p.id); });
             marks[p.id] = mk;

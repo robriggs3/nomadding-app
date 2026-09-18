@@ -21,6 +21,16 @@ jobs:
         run: node tools/assemble.js && git diff --exit-code
       - name: Unit tests
         run: node tests/run.js
+      # A real browser, because the unit suite has no Leaflet, no tiles and no
+      # layout. On 2026-09-18 the map drew nothing for two days on every city
+      # with no cached coordinates, with ZERO console errors, and nothing in
+      # node could see it. This can: it asserts a guide with coordinates draws
+      # real markers, a guide with none still draws a canvas, and the page
+      # survives the tile CDN being unreachable.
+      - name: Install a browser for the map checks
+        run: npm ci --no-audit --no-fund && npx playwright install chromium
+      - name: Headless map checks
+        run: node tests/headless.js
       # The edge function is Deno, so node cannot run it. This suite drives the
       # real ai-proxy module with a mocked upstream and a mocked database, which
       # is the only way the money paths (the caps, the kill switch, the model

@@ -1,5 +1,12 @@
 {
+  "name": "nomadding-app",
+  "private": true,
+  "description": "Static no-build travel-guide PWA. The only dependency is a headless browser, used by tests/headless.js to check the map actually draws.",
+  "scripts": {
+    "test": "node tests/run.js",
+    "test:headless": "node tests/headless.js"
+  },
   "devDependencies": {
-    "playwright": "^1.49.1"
+    "playwright": "1.49.1"
   }
 }
