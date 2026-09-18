@@ -9606,13 +9606,44 @@ var CityOps = (function () {
   // what it could not place, and the page around it is untouched.
   var mapSeq = 0;
 
+  // Where to open a map that has nothing on it yet: the city's own coordinate
+  // once it is known, cached on `city.geo` the same way an item's is.
+  function cityCenter(data) {
+    var c = data && data.city && data.city.geo;
+    if (!c) return null;
+    var ok = okLatLng(Number(c.lat), Number(c.lng));
+    return ok ? { lat: ok.lat, lng: ok.lng } : null;
+  }
+
+  function cacheCityGeo(data, lat, lng) {
+    var ok = okLatLng(Number(lat), Number(lng));
+    if (!data || !data.city || !ok) return null;
+    var out = deepClone(data);
+    out.city.geo = { lat: ok.lat, lng: ok.lng, source: 'nominatim',
+      at: new Date().toISOString().slice(0, 10) };
+    return out;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
     var r = mapPoints(data, items);
     var wrap = el('div', 'mapblock');
     if (!r.points.length && !r.missing.length) return null;
 
-    if (r.points.length) {
+    // ALWAYS a canvas, even with nothing placed yet.
+    //
+    // This is the bug that hid the map from Rob for two days. The canvas used
+    // to be drawn only `if (r.points.length)`, and the shell only loaded
+    // Leaflet for blocks that had one. A fresh city has no cached coordinates,
+    // so: no points, no canvas, no Leaflet, and the geocoder never started
+    // because it was called after the loader. No pins, forever, on every city
+    // anybody had not already mapped. Reproduced headless on the live app,
+    // 2026-09-18: mapblock 1, canvases 0, leaflet-container 0, markers 0,
+    // nominatim requests 0.
+    //
+    // A map with no pins yet is still a map: it shows the city, it says what
+    // it is doing, and the pins arrive as they resolve.
+    {
       var id = 'map-' + (++mapSeq);
       var canvas = el('div', 'mapcanvas');
       canvas.id = id;
@@ -9623,7 +9654,8 @@ var CityOps = (function () {
       canvas.setAttribute('aria-label', o.label || 'Map of these places');
       wrap.appendChild(canvas);
       // What the shell needs to draw into it, without re-deriving any of it.
-      wrap.mapPayload = { id: id, points: r.points, fit: true };
+      wrap.mapPayload = { id: id, points: r.points, fit: r.points.length > 0,
+        center: cityCenter(data), missing: r.missing.length };
 
       if (o.legend !== false) {
         var seen = {};
@@ -11537,6 +11569,7 @@ var CityOps = (function () {
       categories: mapCategories, category: mapCategory, color: mapColor,
       parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
@@ -20998,13 +21031,44 @@ var CityOps = (function () {
   // what it could not place, and the page around it is untouched.
   var mapSeq = 0;
 
+  // Where to open a map that has nothing on it yet: the city's own coordinate
+  // once it is known, cached on `city.geo` the same way an item's is.
+  function cityCenter(data) {
+    var c = data && data.city && data.city.geo;
+    if (!c) return null;
+    var ok = okLatLng(Number(c.lat), Number(c.lng));
+    return ok ? { lat: ok.lat, lng: ok.lng } : null;
+  }
+
+  function cacheCityGeo(data, lat, lng) {
+    var ok = okLatLng(Number(lat), Number(lng));
+    if (!data || !data.city || !ok) return null;
+    var out = deepClone(data);
+    out.city.geo = { lat: ok.lat, lng: ok.lng, source: 'nominatim',
+      at: new Date().toISOString().slice(0, 10) };
+    return out;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
     var r = mapPoints(data, items);
     var wrap = el('div', 'mapblock');
     if (!r.points.length && !r.missing.length) return null;
 
-    if (r.points.length) {
+    // ALWAYS a canvas, even with nothing placed yet.
+    //
+    // This is the bug that hid the map from Rob for two days. The canvas used
+    // to be drawn only `if (r.points.length)`, and the shell only loaded
+    // Leaflet for blocks that had one. A fresh city has no cached coordinates,
+    // so: no points, no canvas, no Leaflet, and the geocoder never started
+    // because it was called after the loader. No pins, forever, on every city
+    // anybody had not already mapped. Reproduced headless on the live app,
+    // 2026-09-18: mapblock 1, canvases 0, leaflet-container 0, markers 0,
+    // nominatim requests 0.
+    //
+    // A map with no pins yet is still a map: it shows the city, it says what
+    // it is doing, and the pins arrive as they resolve.
+    {
       var id = 'map-' + (++mapSeq);
       var canvas = el('div', 'mapcanvas');
       canvas.id = id;
@@ -21015,7 +21079,8 @@ var CityOps = (function () {
       canvas.setAttribute('aria-label', o.label || 'Map of these places');
       wrap.appendChild(canvas);
       // What the shell needs to draw into it, without re-deriving any of it.
-      wrap.mapPayload = { id: id, points: r.points, fit: true };
+      wrap.mapPayload = { id: id, points: r.points, fit: r.points.length > 0,
+        center: cityCenter(data), missing: r.missing.length };
 
       if (o.legend !== false) {
         var seen = {};
@@ -22929,6 +22994,7 @@ var CityOps = (function () {
       categories: mapCategories, category: mapCategory, color: mapColor,
       parseLatLng: parseLatLng, parseMapQuery: parseMapQuery, mapLink: itemMapLink,
       point: itemPoint, geocodeQuery: geocodeQuery, points: mapPoints, cacheGeo: cacheGeo,
+      cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
@@ -25290,6 +25356,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       var row = card.querySelector('.card-ctl') || card;
       row.appendChild(b);
     });
+    // GEOCODING STARTS REGARDLESS OF LEAFLET, and regardless of whether
+    // anything is placed yet. This ordering is the bug that hid the map for two
+    // days: it used to sit inside the loader's .then, behind an early return
+    // that fired whenever no item had a coordinate, which is every fresh city.
+    // No pins meant no map meant no lookups meant no pins.
+    geocodeMissing();
     if (!live.length) return;
     leafletWanted = true;
     loadLeaflet().then(function (L) {
@@ -25308,6 +25380,19 @@ only judges it. `ratings` may be omitted when you could not verify the place;
           }).addTo(map);
           var bounds = [];
           var marks = {};
+          b.mapAddPin = function (p) {
+            try {
+              var mk2 = L.circleMarker([p.lat, p.lng], {
+                radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
+              }).addTo(map);
+              mk2.bindTooltip(p.name, { direction: 'top' });
+              mk2.on('click', function () { gotoItem(p.id); });
+              marks[p.id] = mk2;
+              bounds.push([p.lat, p.lng]);
+              if (bounds.length === 1) map.setView(bounds[0], 14);
+              else map.fitBounds(bounds, { padding: [24, 24] });
+            } catch (e) { /* one pin is never worth the page */ }
+          };
           pay.points.forEach(function (p) {
             var mk = L.circleMarker([p.lat, p.lng], {
               radius: 7, weight: 2, color: '#ffffff', fillColor: p.color, fillOpacity: 1
@@ -25317,7 +25402,13 @@ only judges it. `ratings` may be omitted when you could not verify the place;
             marks[p.id] = mk;
             bounds.push([p.lat, p.lng]);
           });
-          if (bounds.length === 1) map.setView(bounds[0], 15);
+          if (!bounds.length) {
+            // Nothing placed yet: open on the city if we know where it is, and
+            // otherwise sit at a world view until the first pin lands. Either
+            // way the traveler sees a map rather than a blank strip.
+            if (pay.center) map.setView([pay.center.lat, pay.center.lng], 12);
+            else map.setView([20, 0], 2);
+          } else if (bounds.length === 1) map.setView(bounds[0], 15);
           else map.fitBounds(bounds, { padding: [24, 24] });
           b.mapFlash = function (id) {
             var hit = marks[id];
@@ -25373,6 +25464,21 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     if (!todo.length) return;
     geocoding = true;
     var i = 0;
+    // The CITY first, once, so a map with nothing on it still opens where the
+    // traveler is rather than on the Atlantic.
+    function ensureCityCenter(next) {
+      var d0 = CityOps.effectiveData(store.cities[activeId],
+        CityOps.liveState() || CityOps.makeStore(activeId, LS).load());
+      if (CityOps.mapKit.cityCenter(d0) || !d0.city || !d0.city.name) { next(); return; }
+      geocodeOne(d0.city.name + (d0.city.country ? ', ' + d0.city.country : ''))
+        .then(function (pt) {
+          if (pt) {
+            var withCity = CityOps.mapKit.cacheCityGeo(d0, pt.lat, pt.lng);
+            if (withCity) commitCityData(withCity);
+          }
+          setTimeout(next, GEO_GAP_MS);
+        });
+    }
     // Say what is happening. The first open of a city does 30-odd lookups at
     // one a second, and a map that is empty for half a minute with no words on
     // it reads as a map that is broken.
@@ -25409,7 +25515,7 @@ only judges it. `ratings` may be omitted when you could not verify the place;
         setTimeout(step, GEO_GAP_MS);
       });
     }
-    step();
+    ensureCityCenter(step);
   }
 
   function commitCityData(newData) {
