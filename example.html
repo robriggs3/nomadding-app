@@ -6013,6 +6013,84 @@ var CityOps = (function () {
     return st;
   }
 
+  // ---- Snapshots, so a wrong replace is recoverable by design ----
+  //
+  // The Batumi incident: a destructive write replaced a guide and the only
+  // reason the traveler got it back was that a copy happened to exist
+  // somewhere else. That is luck, and luck is not a feature. Every write that
+  // can REMOVE work now keeps the previous version first.
+  //
+  // Three per city, newest last. Not a history: enough to undo the mistake you
+  // just made and the one before it, and no more, because these hold whole
+  // guides and live in the browser.
+  //
+  // THESE DO NOT SYNC, and that is deliberate. pasteLog rides in the state
+  // blob because it is a list of ids; a snapshot is an entire guide, and
+  // pushing three of them per city into the state row would multiply every
+  // sync payload by four to protect against a mistake that is local anyway.
+  var SNAPSHOT_MAX = 3;
+
+  function addSnapshot(list, data, reason) {
+    var out = Array.isArray(list) ? list.slice() : [];
+    if (!data || !Array.isArray(data.items)) return out;
+    out.push({ at: new Date().toISOString(), reason: String(reason || 'replace'),
+      items: data.items.length, data: deepClone(data) });
+    while (out.length > SNAPSHOT_MAX) out.shift();
+    return out;
+  }
+
+  function newestSnapshot(list) {
+    var l = Array.isArray(list) ? list : [];
+    for (var i = l.length - 1; i >= 0; i--) {
+      if (l[i] && l[i].data && Array.isArray(l[i].data.items)) return l[i];
+    }
+    return null;
+  }
+
+  // What a write actually did to a guide, counted by id rather than by length,
+  // so a write that drops five places and adds five is not reported as no
+  // change at all.
+  function replaceDamage(before, after) {
+    var b = (before && Array.isArray(before.items)) ? before.items : [];
+    var a = (after && Array.isArray(after.items)) ? after.items : [];
+    var had = {};
+    b.forEach(function (it) { if (it && it.id) had[it.id] = 1; });
+    var kept = 0, added = 0;
+    a.forEach(function (it) {
+      if (!it || !it.id) return;
+      if (had[it.id]) { kept++; delete had[it.id]; } else added++;
+    });
+    var removed = 0;
+    Object.keys(had).forEach(function () { removed++; });
+    return { before: b.length, after: a.length, removed: removed, added: added, kept: kept };
+  }
+
+  // Worth interrupting the traveler for, or not.
+  //
+  // A silent snapshot covers everything; the BAR is for the writes somebody
+  // would want to catch in the moment. Losing one place is an edit. Losing a
+  // third of a guide, or more than three places, is an accident, and a
+  // traveler mid-trip needs to see it while the undo is still one tap away.
+  function isBigReplace(before, after) {
+    var d = replaceDamage(before, after);
+    if (d.removed === 0) return false;
+    if (d.removed > 3) return true;
+    return d.before > 0 && (d.removed / d.before) > 0.25;
+  }
+
+  // The bar's words. Says what was lost and where it came from, in that order,
+  // because "34 places became 6" is the part that makes somebody act.
+  function replaceUndoText(before, after, source) {
+    var d = replaceDamage(before, after);
+    var from = source ? (' from ' + source) : '';
+    if (d.added > 0) {
+      return d.before + ' places became ' + d.after + from + '. ' +
+        d.removed + ' went, ' + d.added + ' arrived.';
+    }
+    return d.before + ' places became ' + d.after + from + '. ' +
+      d.removed + (d.removed === 1 ? ' place went.' : ' places went.');
+  }
+
   function undoPasteText(entry) {
     if (!entry) return '';
     var n = entry.ids.length;
@@ -11370,6 +11448,9 @@ var CityOps = (function () {
       placeholderReason: placeholderReason,
       removeItemsById: removeItemsById, recordPaste: recordPaste,
       lastPaste: lastPaste, undoPasteText: undoPasteText,
+      addSnapshot: addSnapshot, newestSnapshot: newestSnapshot,
+      replaceDamage: replaceDamage, isBigReplace: isBigReplace,
+      replaceUndoText: replaceUndoText, SNAPSHOT_MAX: SNAPSHOT_MAX,
       aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
       coverageShortfall: coverageShortfall, shortfallText: shortfallText,
       coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
