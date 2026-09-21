@@ -2371,6 +2371,69 @@ test('the first stay in a city inherits the city dates, the second does not', ()
   assert.equal(accs[0].checkOut, '');
 });
 
+test('a session that cannot refresh is never offered one-tap AI on our key', () => {
+  const k = C.aiProxyKit;
+  const sub = { entitled: true, hasKey: false, signedIn: true, tier: 'managed' };
+  // The healthy subscriber, unchanged.
+  assert.equal(k.transport(sub), 'proxy');
+  assert.equal(k.noTransportReason(sub), '');
+
+  // THE BUG, 2026-09-06: `signedIn` only ever meant "a session object exists",
+  // which stays true through an expired token and a refresh failing over and
+  // over. The app promised our key, the traveler pressed it, the request
+  // refused. Now the promise is not made.
+  const stuck = Object.assign({}, sub, { sessionStuck: true });
+  assert.equal(k.transport(stuck), 'none',
+    'a session that cannot produce a token was still offered a run that needs one');
+  assert.equal(k.noTransportReason(stuck), 'session-stuck',
+    'the shells cannot tell a stuck session from a missing key, so the copy stays wrong');
+
+  // A key of this device's own needs no session, so a refresh outage is
+  // irrelevant to it. A subscriber who also saved a key keeps working.
+  assert.equal(k.transport(Object.assign({}, stuck, { hasKey: true })), 'direct');
+
+  // The reason codes stay distinguishable, because each one is different advice.
+  assert.equal(k.noTransportReason({ entitled: false }), 'not-entitled');
+  assert.equal(k.noTransportReason({ entitled: true, signedIn: false }), 'signed-out');
+  assert.equal(k.noTransportReason({ entitled: true, signedIn: true, tier: 'free' }), 'no-tier');
+  // And a working transport has no reason at all to give.
+  assert.equal(k.noTransportReason({ entitled: true, hasKey: true }), '');
+
+  // The line above the button follows the transport, so a stuck session shows
+  // no "this runs on our key" promise either.
+  assert.equal(k.transportLine(stuck).show, false,
+    'the modal still printed a promise about our key for a session that cannot use it');
+  assert.equal(k.transportLine(sub).onOurKey, true);
+});
+
+test('both shells read the same refresh counter the sync banner reads', () => {
+  // The defect was not that the count did not exist. It was that the AI side
+  // never looked at it, while the sync banner three hundred lines away had
+  // been counting the whole time. This pins BOTH surfaces to one threshold so
+  // they cannot drift into telling the traveler two different stories.
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..');
+  [['index.html', 'REFRESH_TROUBLE_LIMIT', 'refreshTrouble'],
+   ['trip/index.html', 'REFRESH_TROUBLE_LIMIT', '_refreshTrouble']].forEach(([file, konst, counter]) => {
+    const html = fs.readFileSync(path.join(root, file), 'utf8');
+    assert.ok(html.indexOf('var ' + konst + ' = 3;') !== -1 ||
+      html.indexOf('const ' + konst + ' = 3;') !== -1,
+      file + ' has no single ' + konst);
+    // The banner uses it.
+    assert.ok(new RegExp(counter.replace(/[$]/g, '') + ' >= ' + konst).test(html),
+      file + ': the sync banner still compares against a bare number');
+    // And so does the AI transport. Asserting the NAME appears is not enough:
+    // `sessionStuck: false` contains it and reads the counter never. The
+    // expression itself has to name the counter and the shared threshold.
+    assert.ok(new RegExp('sessionStuck:[^\\n]*\\b' + counter + '\\b[^\\n]*' + konst).test(html),
+      file + ': the AI transport never reads the refresh counter, which is the whole bug');
+    // A literal 3 left behind in either comparison is the drift this prevents.
+    assert.equal(new RegExp(counter + ' >= 3\\b').test(html), false,
+      file + ': a bare 3 is still being compared against, so the two can drift');
+  });
+});
+
 test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
   // 18 of Rob's 35 Istanbul places were searched and are simply not in
   // OpenStreetMap; 2 more have no address to search on. Query tuning cannot

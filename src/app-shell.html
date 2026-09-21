@@ -2918,7 +2918,10 @@
       hasKey: !!loadApiKey(),
       tier: (entRow && entRow.row && entRow.row.tier) || '',
       entitled: entAllows(),
-      signedIn: entMocked || !!(session && session.access_token)
+      signedIn: entMocked || !!(session && session.access_token),
+      // Not "is there a session object" but "can this session still get a
+      // token". The mock is exempt: it has no refresh to fail.
+      sessionStuck: !entMocked && refreshTrouble >= REFRESH_TROUBLE_LIMIT
     };
   }
 
@@ -2944,6 +2947,14 @@
   // Never a bare refusal, and never a control that cannot succeed: this is the
   // sentence a modal shows INSTEAD of the one-tap button.
   function aiNoTransportText() {
+    // Asked first among the signed-in cases: a subscriber whose session cannot
+    // refresh is not somebody who needs to be told to save a key. He needs to
+    // be told the truth, which is that signing in again fixes it.
+    if (CityOps.aiProxyKit.noTransportReason(aiTransportCtx()) === 'session-stuck') {
+      return 'This device cannot refresh your sign-in right now, so AI on our key has nothing ' +
+        'to authenticate with. Sign in again from Profile and it comes straight back. The ' +
+        'prompt below works in your own chat in the meantime, free, and nothing here is lost.';
+    }
     if (!(session && session.access_token) && !entMocked) {
       return 'No Claude API key is saved on this device, so the prompt goes to your own chat and ' +
         'the answer comes back through the box below. Save a key in Profile to do it in one tap.';
@@ -4147,6 +4158,11 @@
   // the row first (see profilePreflight).
   var sidecarsKnown = false;
   var refreshTrouble = 0;      // consecutive non-fatal token refresh failures
+  // The line between "a refresh blipped" and "this session cannot produce a
+  // token". One number, read by BOTH the sync banner and the AI transport, so
+  // the app can never tell the traveler his sync is stuck while still offering
+  // him a one-tap run that needs the very token it cannot get.
+  var REFRESH_TROUBLE_LIMIT = 3;
 
   function syncOn() {
     return !!(SUPA.url && SUPA.anon && typeof fetch === 'function');
@@ -4321,7 +4337,7 @@
   // traveler should hear about rather than discover on the next device.
   function noteRefreshTrouble() {
     refreshTrouble++;
-    if (refreshTrouble >= 3) raiseSyncAlert('stuck');
+    if (refreshTrouble >= REFRESH_TROUBLE_LIMIT) raiseSyncAlert('stuck');
   }
 
   function noteSyncWorking() {
