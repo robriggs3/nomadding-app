@@ -2131,6 +2131,197 @@ test('a map block draws a canvas even when nothing is placed yet', () => {
   assert.equal(block.mapPayload.fit, false);
 });
 
+function guideOf(n) {
+  const items = [];
+  for (let i = 1; i <= n; i++) items.push({ id: 'i' + i, section: 'dinner', name: 'P' + i });
+  return { schema: 1, city: { name: 'Istanbul' }, sections: [{ id: 'dinner', label: 'Dinner' }], items: items };
+}
+
+test('the undo bar offers the guide back, and undoing is itself undoable', () => {
+  // Drives the SHIPPED showReplaceUndoBar, DOM calls and all, rather than a
+  // description of it. The bar is the one part of this the traveler sees, and
+  // a bar that renders but hands back the wrong guide is worse than no bar.
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function showReplaceUndoBar(');
+  assert.ok(start !== -1, 'showReplaceUndoBar is missing from the assembled app');
+  const end = html.indexOf('\n  }\n', start);
+  const src = html.slice(start, end + 4);
+
+  const before = { schema: 1, city: { name: 'Istanbul' }, sections: [],
+    items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] };
+  const after = { schema: 1, city: { name: 'Istanbul' }, sections: [], items: [{ id: 'a' }] };
+
+  const committed = [];
+  const snapped = [];
+  const body = { children: [], appendChild: function (c) { this.children.push(c); return c; } };
+  function node(cls, txt) {
+    return { cls: cls, textContent: txt || '', children: [], attrs: {},
+      appendChild: function (c) { this.children.push(c); return c; },
+      setAttribute: function (k, v) { this.attrs[k] = v; } };
+  }
+  const fn = new Function('document', 'el', 'CityOps', 'commitCityData', 'keepSnapshot',
+    src + '\nreturn showReplaceUndoBar;');
+  fn({ getElementById: function () { return null; }, body: body },
+    function (tag, cls, txt) { return node(cls, txt); },
+    C,
+    function (d) { committed.push(d); },
+    function (id, data, reason) { snapped.push({ id: id, n: data.items.length, reason: reason }); }
+  )('istanbul-2026-09-16', before, after, 'another device');
+
+  assert.equal(body.children.length, 1, 'no bar was added to the page');
+  const bar = body.children[0];
+  const words = bar.children.map((c) => c.textContent).join(' | ');
+  assert.ok(/Istanbul: 4 places became 1 from another device\. 3 places went\./.test(words),
+    'the bar does not say what was lost: ' + words);
+  assert.ok(/Undo/.test(words) && /Keep the change/.test(words), words);
+
+  // Undo hands back the guide as it was, not the one that replaced it.
+  const undo = bar.children.filter((c) => c.textContent === 'Undo')[0];
+  assert.ok(undo && typeof undo.onclick === 'function', 'the bar has no working Undo');
+  undo.onclick();
+  assert.equal(committed.length, 1);
+  assert.equal(committed[0].items.length, 4, 'Undo restored the wrong guide');
+
+  // And undoing is itself undoable: the state being undone FROM is kept first,
+  // so a mistaken Undo is not a one-way door either.
+  assert.deepEqual(snapped, [{ id: 'istanbul-2026-09-16', n: 1, reason: 'undo' }],
+    'Undo threw away the version it was undoing');
+});
+
+test('a signed-in device does not push until it has heard the account back', () => {
+  // The second #30 gap, driven through the SHIPPED flushPush rather than a
+  // description of it.
+  //
+  // Why it matters: every local write stamps updatedAt to now and the
+  // reconcile is newest-wins. The geocoder alone writes 33 times when a city
+  // first opens, restamping the whole guide without changing a word of it. A
+  // device carrying a week-old copy only has to OPEN a city to look like the
+  // newest thing the account has ever seen, and the 2s debounce then pushes it
+  // over the good copy.
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const start = html.indexOf('function flushPush(');
+  assert.ok(start !== -1, 'flushPush is missing from the assembled app');
+  const end = html.indexOf('\n  }\n', start);
+  const src = html.slice(start, end + 4);
+
+  function run(opts) {
+    let pushed = 0, deferred = 0;
+    const fn = new Function('session', 'firstPullDone', 'setTimeout', 'clearTimeout',
+      'pushNow', 'readStateFull', 'store', 'has', 'CityOps', 'onPushed',
+      'var pushTimer = 1;\n' +
+      'var pushQueueData = ' + JSON.stringify(opts.queue) + ';\n' +
+      'var pushQueueState = {};\n' +
+      'var pushQueueProfile = false;\n' +
+      src + '\nreturn flushPush;');
+    fn(opts.session, opts.firstPullDone,
+      function () { deferred++; return 2; }, function () {},
+      function (kind, entries) { if (entries && entries.length) pushed += entries.length; },
+      function () { return null; },
+      { cities: { 'istanbul-2026-09-16': { city: { name: 'Istanbul' } } },
+        updatedAt: { 'istanbul-2026-09-16': '2026-09-21T00:00:00Z' } },
+      function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); },
+      { syncKit: { EPOCH: '1970-01-01T00:00:00Z' } },
+      function () {})();
+    return { pushed: pushed, deferred: deferred };
+  }
+
+  const queue = { 'istanbul-2026-09-16': 1 };
+
+  // Signed in, no pull yet: nothing goes up, and the work is KEPT, not dropped.
+  const gated = run({ session: { access_token: 't' }, firstPullDone: false, queue: queue });
+  assert.equal(gated.pushed, 0,
+    'a device pushed its copy before it had heard what the account holds');
+  assert.equal(gated.deferred, 1, 'the queued push was dropped rather than retried');
+
+  // Same device, once the pull has landed: it pushes.
+  const open = run({ session: { access_token: 't' }, firstPullDone: true, queue: queue });
+  assert.equal(open.pushed, 1, 'a device that has pulled still cannot push');
+
+  // Signed out: the gate is irrelevant, nothing is queued for an account and
+  // the old behaviour is untouched.
+  const out = run({ session: null, firstPullDone: false, queue: queue });
+  assert.equal(out.deferred, 0, 'a signed-out device was made to wait for a pull it will never do');
+});
+
+test('a replace is counted by id, so a swap is not reported as no change', () => {
+  const k = C.promptKit;
+  // Five out, five in. Both guides hold five places, and a length comparison
+  // would call that nothing happening.
+  const before = guideOf(5);
+  const after = { ...guideOf(5), items: [{ id: 'x1' }, { id: 'x2' }, { id: 'x3' }, { id: 'x4' }, { id: 'x5' }] };
+  const d = k.replaceDamage(before, after);
+  assert.deepEqual({ removed: d.removed, added: d.added, kept: d.kept }, { removed: 5, added: 5, kept: 0 },
+    'a swap of every place read as no damage');
+  assert.equal(k.isBigReplace(before, after), true);
+
+  // And the ordinary case.
+  const shrunk = { ...before, items: before.items.slice(0, 1) };
+  assert.deepEqual(k.replaceDamage(before, shrunk),
+    { before: 5, after: 1, removed: 4, added: 0, kept: 1 });
+});
+
+test('the undo bar is raised for an accident and not for an edit', () => {
+  const k = C.promptKit;
+  const big = guideOf(34);
+  // A big guide losing three places is somebody tidying up.
+  assert.equal(k.isBigReplace(big, { ...big, items: big.items.slice(0, 31) }), false);
+  // Losing four is past the flat limit.
+  assert.equal(k.isBigReplace(big, { ...big, items: big.items.slice(0, 30) }), true);
+  // A small guide is judged by proportion instead: one of six is an edit,
+  // two of six is a third of the guide.
+  const small = guideOf(6);
+  assert.equal(k.isBigReplace(small, { ...small, items: small.items.slice(0, 5) }), false);
+  assert.equal(k.isBigReplace(small, { ...small, items: small.items.slice(0, 4) }), true);
+  // Nothing removed is never big, however much arrived.
+  assert.equal(k.isBigReplace(small, guideOf(40)), false);
+});
+
+test('a snapshot is a deep copy, newest last, and never more than three', () => {
+  const k = C.promptKit;
+  const a = guideOf(3);
+  let list = k.addSnapshot([], a, 'replace');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].items, 3);
+  assert.equal(list[0].reason, 'replace');
+
+  // A deep copy: mutating the guide afterwards must not reach the snapshot,
+  // or the safety net holds a reference to the very thing being destroyed.
+  a.items.length = 0;
+  assert.equal(list[0].data.items.length, 3, 'the snapshot shared its array with the live guide');
+
+  list = k.addSnapshot(list, guideOf(4), 'replace');
+  list = k.addSnapshot(list, guideOf(5), 'replace');
+  list = k.addSnapshot(list, guideOf(6), 'replace');
+  assert.equal(list.length, C.promptKit.SNAPSHOT_MAX);
+  assert.equal(list.length, 3);
+  assert.deepEqual(list.map((e) => e.items), [4, 5, 6], 'the ring dropped the wrong end');
+  assert.equal(k.newestSnapshot(list).items, 6);
+  assert.equal(k.newestSnapshot([]), null);
+  // Junk in the list is skipped rather than handed back as a guide to restore.
+  assert.equal(k.newestSnapshot([{ at: 'x' }]), null);
+  // A guide with no items array is not snapshottable at all.
+  assert.deepEqual(k.addSnapshot([], null, 'replace'), []);
+});
+
+test('the undo bar says what was lost before it says where it came from', () => {
+  const k = C.promptKit;
+  const before = guideOf(34);
+  const after = { ...before, items: before.items.slice(0, 6) };
+  assert.equal(k.replaceUndoText(before, after, 'another device'),
+    '34 places became 6 from another device. 28 places went.');
+  // A swap names both halves, because "28 went" alone reads as a pure loss.
+  const swapped = { ...before, items: [{ id: 'z1' }, { id: 'z2' }] };
+  assert.equal(k.replaceUndoText(before, swapped, ''),
+    '34 places became 2. 34 went, 2 arrived.');
+  // One place lost is singular.
+  const one = { ...before, items: before.items.slice(0, 33) };
+  assert.equal(k.replaceUndoText(before, one, ''), '34 places became 33. 1 place went.');
+});
+
 test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
   // 18 of Rob's 35 Istanbul places were searched and are simply not in
   // OpenStreetMap; 2 more have no address to search on. Query tuning cannot

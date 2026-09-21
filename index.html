@@ -6161,6 +6161,84 @@ var CityOps = (function () {
     return st;
   }
 
+  // ---- Snapshots, so a wrong replace is recoverable by design ----
+  //
+  // The Batumi incident: a destructive write replaced a guide and the only
+  // reason the traveler got it back was that a copy happened to exist
+  // somewhere else. That is luck, and luck is not a feature. Every write that
+  // can REMOVE work now keeps the previous version first.
+  //
+  // Three per city, newest last. Not a history: enough to undo the mistake you
+  // just made and the one before it, and no more, because these hold whole
+  // guides and live in the browser.
+  //
+  // THESE DO NOT SYNC, and that is deliberate. pasteLog rides in the state
+  // blob because it is a list of ids; a snapshot is an entire guide, and
+  // pushing three of them per city into the state row would multiply every
+  // sync payload by four to protect against a mistake that is local anyway.
+  var SNAPSHOT_MAX = 3;
+
+  function addSnapshot(list, data, reason) {
+    var out = Array.isArray(list) ? list.slice() : [];
+    if (!data || !Array.isArray(data.items)) return out;
+    out.push({ at: new Date().toISOString(), reason: String(reason || 'replace'),
+      items: data.items.length, data: deepClone(data) });
+    while (out.length > SNAPSHOT_MAX) out.shift();
+    return out;
+  }
+
+  function newestSnapshot(list) {
+    var l = Array.isArray(list) ? list : [];
+    for (var i = l.length - 1; i >= 0; i--) {
+      if (l[i] && l[i].data && Array.isArray(l[i].data.items)) return l[i];
+    }
+    return null;
+  }
+
+  // What a write actually did to a guide, counted by id rather than by length,
+  // so a write that drops five places and adds five is not reported as no
+  // change at all.
+  function replaceDamage(before, after) {
+    var b = (before && Array.isArray(before.items)) ? before.items : [];
+    var a = (after && Array.isArray(after.items)) ? after.items : [];
+    var had = {};
+    b.forEach(function (it) { if (it && it.id) had[it.id] = 1; });
+    var kept = 0, added = 0;
+    a.forEach(function (it) {
+      if (!it || !it.id) return;
+      if (had[it.id]) { kept++; delete had[it.id]; } else added++;
+    });
+    var removed = 0;
+    Object.keys(had).forEach(function () { removed++; });
+    return { before: b.length, after: a.length, removed: removed, added: added, kept: kept };
+  }
+
+  // Worth interrupting the traveler for, or not.
+  //
+  // A silent snapshot covers everything; the BAR is for the writes somebody
+  // would want to catch in the moment. Losing one place is an edit. Losing a
+  // third of a guide, or more than three places, is an accident, and a
+  // traveler mid-trip needs to see it while the undo is still one tap away.
+  function isBigReplace(before, after) {
+    var d = replaceDamage(before, after);
+    if (d.removed === 0) return false;
+    if (d.removed > 3) return true;
+    return d.before > 0 && (d.removed / d.before) > 0.25;
+  }
+
+  // The bar's words. Says what was lost and where it came from, in that order,
+  // because "34 places became 6" is the part that makes somebody act.
+  function replaceUndoText(before, after, source) {
+    var d = replaceDamage(before, after);
+    var from = source ? (' from ' + source) : '';
+    if (d.added > 0) {
+      return d.before + ' places became ' + d.after + from + '. ' +
+        d.removed + ' went, ' + d.added + ' arrived.';
+    }
+    return d.before + ' places became ' + d.after + from + '. ' +
+      d.removed + (d.removed === 1 ? ' place went.' : ' places went.');
+  }
+
   function undoPasteText(entry) {
     if (!entry) return '';
     var n = entry.ids.length;
@@ -11518,6 +11596,9 @@ var CityOps = (function () {
       placeholderReason: placeholderReason,
       removeItemsById: removeItemsById, recordPaste: recordPaste,
       lastPaste: lastPaste, undoPasteText: undoPasteText,
+      addSnapshot: addSnapshot, newestSnapshot: newestSnapshot,
+      replaceDamage: replaceDamage, isBigReplace: isBigReplace,
+      replaceUndoText: replaceUndoText, SNAPSHOT_MAX: SNAPSHOT_MAX,
       aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
       coverageShortfall: coverageShortfall, shortfallText: shortfallText,
       coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
@@ -17706,6 +17787,84 @@ var CityOps = (function () {
     return st;
   }
 
+  // ---- Snapshots, so a wrong replace is recoverable by design ----
+  //
+  // The Batumi incident: a destructive write replaced a guide and the only
+  // reason the traveler got it back was that a copy happened to exist
+  // somewhere else. That is luck, and luck is not a feature. Every write that
+  // can REMOVE work now keeps the previous version first.
+  //
+  // Three per city, newest last. Not a history: enough to undo the mistake you
+  // just made and the one before it, and no more, because these hold whole
+  // guides and live in the browser.
+  //
+  // THESE DO NOT SYNC, and that is deliberate. pasteLog rides in the state
+  // blob because it is a list of ids; a snapshot is an entire guide, and
+  // pushing three of them per city into the state row would multiply every
+  // sync payload by four to protect against a mistake that is local anyway.
+  var SNAPSHOT_MAX = 3;
+
+  function addSnapshot(list, data, reason) {
+    var out = Array.isArray(list) ? list.slice() : [];
+    if (!data || !Array.isArray(data.items)) return out;
+    out.push({ at: new Date().toISOString(), reason: String(reason || 'replace'),
+      items: data.items.length, data: deepClone(data) });
+    while (out.length > SNAPSHOT_MAX) out.shift();
+    return out;
+  }
+
+  function newestSnapshot(list) {
+    var l = Array.isArray(list) ? list : [];
+    for (var i = l.length - 1; i >= 0; i--) {
+      if (l[i] && l[i].data && Array.isArray(l[i].data.items)) return l[i];
+    }
+    return null;
+  }
+
+  // What a write actually did to a guide, counted by id rather than by length,
+  // so a write that drops five places and adds five is not reported as no
+  // change at all.
+  function replaceDamage(before, after) {
+    var b = (before && Array.isArray(before.items)) ? before.items : [];
+    var a = (after && Array.isArray(after.items)) ? after.items : [];
+    var had = {};
+    b.forEach(function (it) { if (it && it.id) had[it.id] = 1; });
+    var kept = 0, added = 0;
+    a.forEach(function (it) {
+      if (!it || !it.id) return;
+      if (had[it.id]) { kept++; delete had[it.id]; } else added++;
+    });
+    var removed = 0;
+    Object.keys(had).forEach(function () { removed++; });
+    return { before: b.length, after: a.length, removed: removed, added: added, kept: kept };
+  }
+
+  // Worth interrupting the traveler for, or not.
+  //
+  // A silent snapshot covers everything; the BAR is for the writes somebody
+  // would want to catch in the moment. Losing one place is an edit. Losing a
+  // third of a guide, or more than three places, is an accident, and a
+  // traveler mid-trip needs to see it while the undo is still one tap away.
+  function isBigReplace(before, after) {
+    var d = replaceDamage(before, after);
+    if (d.removed === 0) return false;
+    if (d.removed > 3) return true;
+    return d.before > 0 && (d.removed / d.before) > 0.25;
+  }
+
+  // The bar's words. Says what was lost and where it came from, in that order,
+  // because "34 places became 6" is the part that makes somebody act.
+  function replaceUndoText(before, after, source) {
+    var d = replaceDamage(before, after);
+    var from = source ? (' from ' + source) : '';
+    if (d.added > 0) {
+      return d.before + ' places became ' + d.after + from + '. ' +
+        d.removed + ' went, ' + d.added + ' arrived.';
+    }
+    return d.before + ' places became ' + d.after + from + '. ' +
+      d.removed + (d.removed === 1 ? ' place went.' : ' places went.');
+  }
+
   function undoPasteText(entry) {
     if (!entry) return '';
     var n = entry.ids.length;
@@ -23063,6 +23222,9 @@ var CityOps = (function () {
       placeholderReason: placeholderReason,
       removeItemsById: removeItemsById, recordPaste: recordPaste,
       lastPaste: lastPaste, undoPasteText: undoPasteText,
+      addSnapshot: addSnapshot, newestSnapshot: newestSnapshot,
+      replaceDamage: replaceDamage, isBigReplace: isBigReplace,
+      replaceUndoText: replaceUndoText, SNAPSHOT_MAX: SNAPSHOT_MAX,
       aiRunProgressText: aiRunProgressText, AI_RUN_TIMEOUT_MS: AI_RUN_TIMEOUT_MS,
       coverageShortfall: coverageShortfall, shortfallText: shortfallText,
       coverageLines: coverageLines, TOKENS_PER_ITEM: TOKENS_PER_ITEM,
@@ -25772,7 +25934,89 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     ensureCityCenter(step);
   }
 
+  // ---- Snapshots: a wrong replace is recoverable by design, not by luck ----
+  //
+  // Local only, never pushed. Three per city. See the engine's addSnapshot for
+  // why these do not ride in the synced state blob.
+  function snapKey(cityId) { return 'cityops.' + cityId + '.snapshots.v1'; }
+
+  function loadSnaps(cityId) {
+    if (!LS) return [];
+    try { return JSON.parse(LS.getItem(snapKey(cityId)) || '[]') || []; }
+    catch (e) { return []; }
+  }
+
+  // A full guide per entry, so this is the one write in the app that can
+  // plausibly hit the storage quota. It degrades instead of throwing: keep
+  // fewer, then keep one, then give up. A snapshot that cannot be written must
+  // never take the actual write down with it, because the write is the thing
+  // the traveler asked for.
+  function saveSnaps(cityId, list) {
+    if (!LS) return false;
+    var l = list.slice();
+    while (l.length) {
+      try { LS.setItem(snapKey(cityId), JSON.stringify(l)); return true; }
+      catch (e) { l.shift(); }
+    }
+    try { LS.removeItem(snapKey(cityId)); } catch (e2) {}
+    return false;
+  }
+
+  // Called with the guide as it was BEFORE the write.
+  function keepSnapshot(cityId, beforeData, reason) {
+    if (!cityId || !beforeData) return;
+    saveSnaps(cityId, CityOps.promptKit.addSnapshot(loadSnaps(cityId), beforeData, reason));
+  }
+
+  // The bar, for a write big enough that somebody would want to catch it in
+  // the moment. Small losses are snapshotted silently; this is the shout.
+  function showReplaceUndoBar(cityId, beforeData, afterData, source) {
+    var old = document.getElementById('replace-undo');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var bar = el('div', 'updatebar');
+    bar.id = 'replace-undo';
+    bar.appendChild(el('span', null,
+      (beforeData.city && beforeData.city.name ? beforeData.city.name + ': ' : '') +
+      CityOps.promptKit.replaceUndoText(beforeData, afterData, source)));
+    var undo = el('button', 'ctl to-done', 'Undo');
+    undo.type = 'button';
+    undo.onclick = function () {
+      if (bar.parentNode) bar.parentNode.removeChild(bar);
+      // Snapshot the state we are undoing FROM as well, so a mistaken Undo is
+      // itself undoable. Nothing in this app should be a one-way door.
+      keepSnapshot(cityId, afterData, 'undo');
+      commitCityData(beforeData);
+    };
+    bar.appendChild(undo);
+    var keep = el('button', 'ctl', 'Keep the change');
+    keep.type = 'button';
+    keep.onclick = function () { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+    bar.appendChild(keep);
+    document.body.appendChild(bar);
+  }
+
+  // Every destructive write in the app goes through here or through the pull
+  // below, and both call keepSnapshot first. One chokepoint, not a call
+  // sprinkled at each site, because the site somebody forgets is the one that
+  // loses a guide.
+  //
+  // SNAPSHOT ON LOSS, not on every write. A geocode cache write runs 33 times
+  // when a city first opens and removes nothing; snapshotting those would push
+  // the one snapshot that matters out of a three-slot ring and protect against
+  // nothing. So: anything that removes an item is snapshotted, always.
   function commitCityData(newData) {
+    var targetId = null;
+    try { targetId = CityOps.cityId(newData); } catch (e) {}
+    var before = (targetId && has(store.cities, targetId)) ? store.cities[targetId] : null;
+    if (before) {
+      var dmg = CityOps.promptKit.replaceDamage(before, newData);
+      if (dmg.removed > 0) {
+        keepSnapshot(targetId, before, 'replace');
+        if (CityOps.promptKit.isBigReplace(before, newData)) {
+          showReplaceUndoBar(targetId, clone(before), clone(newData), '');
+        }
+      }
+    }
     var added = CityOps.appStore.add(store, newData);   // stamps updatedAt now
     store = added.store;
     saveStore(store);
@@ -28504,6 +28748,29 @@ only judges it. `ratings` may be omitted when you could not verify the place;
   // 2s debounce per the spec, shared by every table: a burst of taps produces
   // one upsert. A failed flush is NOT retried on a timer; local stays newer
   // than the server, so the next pull's reconcile pushes it. Local is the queue.
+  // ---- A device may not push until it has heard the account's side ----
+  //
+  // The second gap from the #30 review, and it is not theoretical. Every local
+  // write stamps updatedAt to NOW, and the reconcile is newest-wins. The
+  // geocoder alone writes 33 times when a city first opens, each one a cache
+  // write that changes no content and restamps the whole guide to this second.
+  //
+  // So a device carrying a stale copy, one that was offline for a week, or one
+  // whose clock ran fast, only has to OPEN a city to make its stale copy look
+  // like the newest thing the account has ever seen. The 2s debounce then
+  // pushes it, and if that lands before the startup pull, the good copy on the
+  // server is overwritten by the bad one, with no edit and no tap from anybody.
+  //
+  // The gate: while signed in, nothing is pushed until this session has
+  // completed one successful pull. Queued work is kept, not dropped, and goes
+  // up the moment the account's side is known.
+  //
+  // A FAILED pull does not open the gate. That is the deliberate half: if this
+  // device cannot read the account, it has no way to know whether its copy is
+  // the newer one, and a device that cannot read has not earned the right to
+  // write. It retries; nothing is lost while it waits.
+  var firstPullDone = false;
+
   function schedulePush(kind, id) {
     // Re-adding a city with the same id must work, and so must editing one
     // back into existence. Both arrive here, and both mean the same thing: a
@@ -28526,6 +28793,12 @@ only judges it. `ratings` may be omitted when you could not verify the place;
 
   function flushPush() {
     pushTimer = null;
+    if (session && !firstPullDone) {
+      // Keep the queue and come back. pullAll also flushes the moment it
+      // succeeds, so this timer is the belt to that braces.
+      pushTimer = setTimeout(flushPush, 1500);
+      return;
+    }
     var dataEntries = [];
     Object.keys(pushQueueData).forEach(function (id) {
       if (has(store.cities, id)) {
@@ -28605,6 +28878,15 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       applyPull(res[0], res[1], res[2]);
       stampSync();
       noteSyncWorking();
+      // The account's side is known now, so anything this device queued while
+      // it was waiting can go up. applyPull has already reconciled it against
+      // what came back, so what flushes here is the winner, not the stale copy.
+      firstPullDone = true;
+      if (Object.keys(pushQueueData).length || Object.keys(pushQueueState).length ||
+        pushQueueProfile) {
+        if (pushTimer) clearTimeout(pushTimer);
+        pushTimer = setTimeout(flushPush, 0);
+      }
       return true;
     }).catch(function (e) {
       warn('pull failed', e);
@@ -28771,6 +29053,10 @@ only judges it. `ratings` may be omitted when you could not verify the place;
 
     var pulledNames = [];
     var rebootActive = false;
+    // Raised AFTER the pull finishes rather than mid-loop: activateCity reboots
+    // the city and rewrites the page, so a bar added during the loop would be
+    // wiped by the render that follows it.
+    var bigPulls = [];
 
     dataPlan.pull.forEach(function (id) {
       var row = remoteData[id];
@@ -28780,6 +29066,21 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       // payload does not derive the city id it claims to be filed under.
       if (CityOps.validate(row.data).length) { warn('skipped invalid remote city ' + id); return; }
       if (CityOps.cityId(row.data) !== id) { warn('skipped mismatched remote city ' + id); return; }
+      // The pull's own destructive write: this replaces a local city wholesale
+      // whenever the remote row is stamped newer, and before this there was
+      // nothing to go back to. A device that has been offline with stale data,
+      // or one whose clock ran fast, can carry a worse copy than the one it
+      // lands on.
+      var localBefore = has(store.cities, id) ? store.cities[id] : null;
+      if (localBefore) {
+        var pullDmg = CityOps.promptKit.replaceDamage(localBefore, row.data);
+        if (pullDmg.removed > 0) {
+          keepSnapshot(id, localBefore, 'pull');
+          if (CityOps.promptKit.isBigReplace(localBefore, row.data)) {
+            bigPulls.push({ id: id, before: clone(localBefore), after: clone(row.data) });
+          }
+        }
+      }
       var res = CityOps.appStore.add(store, row.data, row.updated_at || CityOps.syncKit.EPOCH);
       store = res.store;
       if (id === activeId) rebootActive = true;
@@ -28826,6 +29127,16 @@ only judges it. `ratings` may be omitted when you could not verify the place;
     pushNow('data', dataEntries);
     pushNow('state', stateEntries);
 
+    if (bigPulls.length) {
+      // One bar, the active city first: a traveler looking at Istanbul needs
+      // to hear about Istanbul, and a stack of bars is a wall nobody reads.
+      var pick = null;
+      bigPulls.forEach(function (p) { if (!pick && p.id === activeId) pick = p; });
+      if (!pick) pick = bigPulls[0];
+      setTimeout(function () {
+        showReplaceUndoBar(pick.id, pick.before, pick.after, 'another device');
+      }, 0);
+    }
     if (rebootActive && has(store.cities, activeId)) {
       var y = 0;
       try { y = window.scrollY || window.pageYOffset || 0; } catch (e) {}
@@ -28910,6 +29221,9 @@ only judges it. `ratings` may be omitted when you could not verify the place;
       } catch (e) {}
     }
     saveSession(null);
+    // The next sign-in is a different account until proven otherwise, so it
+    // pulls before it pushes like any other cold start.
+    firstPullDone = false;
     // Same reasoning as dropSession: re-seed rather than empty, so the next
     // real edit pushes instead of being spent on a baseline.
     stateStamp = seedStateStamps();

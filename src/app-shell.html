@@ -1874,7 +1874,89 @@
     ensureCityCenter(step);
   }
 
+  // ---- Snapshots: a wrong replace is recoverable by design, not by luck ----
+  //
+  // Local only, never pushed. Three per city. See the engine's addSnapshot for
+  // why these do not ride in the synced state blob.
+  function snapKey(cityId) { return 'cityops.' + cityId + '.snapshots.v1'; }
+
+  function loadSnaps(cityId) {
+    if (!LS) return [];
+    try { return JSON.parse(LS.getItem(snapKey(cityId)) || '[]') || []; }
+    catch (e) { return []; }
+  }
+
+  // A full guide per entry, so this is the one write in the app that can
+  // plausibly hit the storage quota. It degrades instead of throwing: keep
+  // fewer, then keep one, then give up. A snapshot that cannot be written must
+  // never take the actual write down with it, because the write is the thing
+  // the traveler asked for.
+  function saveSnaps(cityId, list) {
+    if (!LS) return false;
+    var l = list.slice();
+    while (l.length) {
+      try { LS.setItem(snapKey(cityId), JSON.stringify(l)); return true; }
+      catch (e) { l.shift(); }
+    }
+    try { LS.removeItem(snapKey(cityId)); } catch (e2) {}
+    return false;
+  }
+
+  // Called with the guide as it was BEFORE the write.
+  function keepSnapshot(cityId, beforeData, reason) {
+    if (!cityId || !beforeData) return;
+    saveSnaps(cityId, CityOps.promptKit.addSnapshot(loadSnaps(cityId), beforeData, reason));
+  }
+
+  // The bar, for a write big enough that somebody would want to catch it in
+  // the moment. Small losses are snapshotted silently; this is the shout.
+  function showReplaceUndoBar(cityId, beforeData, afterData, source) {
+    var old = document.getElementById('replace-undo');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var bar = el('div', 'updatebar');
+    bar.id = 'replace-undo';
+    bar.appendChild(el('span', null,
+      (beforeData.city && beforeData.city.name ? beforeData.city.name + ': ' : '') +
+      CityOps.promptKit.replaceUndoText(beforeData, afterData, source)));
+    var undo = el('button', 'ctl to-done', 'Undo');
+    undo.type = 'button';
+    undo.onclick = function () {
+      if (bar.parentNode) bar.parentNode.removeChild(bar);
+      // Snapshot the state we are undoing FROM as well, so a mistaken Undo is
+      // itself undoable. Nothing in this app should be a one-way door.
+      keepSnapshot(cityId, afterData, 'undo');
+      commitCityData(beforeData);
+    };
+    bar.appendChild(undo);
+    var keep = el('button', 'ctl', 'Keep the change');
+    keep.type = 'button';
+    keep.onclick = function () { if (bar.parentNode) bar.parentNode.removeChild(bar); };
+    bar.appendChild(keep);
+    document.body.appendChild(bar);
+  }
+
+  // Every destructive write in the app goes through here or through the pull
+  // below, and both call keepSnapshot first. One chokepoint, not a call
+  // sprinkled at each site, because the site somebody forgets is the one that
+  // loses a guide.
+  //
+  // SNAPSHOT ON LOSS, not on every write. A geocode cache write runs 33 times
+  // when a city first opens and removes nothing; snapshotting those would push
+  // the one snapshot that matters out of a three-slot ring and protect against
+  // nothing. So: anything that removes an item is snapshotted, always.
   function commitCityData(newData) {
+    var targetId = null;
+    try { targetId = CityOps.cityId(newData); } catch (e) {}
+    var before = (targetId && has(store.cities, targetId)) ? store.cities[targetId] : null;
+    if (before) {
+      var dmg = CityOps.promptKit.replaceDamage(before, newData);
+      if (dmg.removed > 0) {
+        keepSnapshot(targetId, before, 'replace');
+        if (CityOps.promptKit.isBigReplace(before, newData)) {
+          showReplaceUndoBar(targetId, clone(before), clone(newData), '');
+        }
+      }
+    }
     var added = CityOps.appStore.add(store, newData);   // stamps updatedAt now
     store = added.store;
     saveStore(store);
@@ -4606,6 +4688,29 @@
   // 2s debounce per the spec, shared by every table: a burst of taps produces
   // one upsert. A failed flush is NOT retried on a timer; local stays newer
   // than the server, so the next pull's reconcile pushes it. Local is the queue.
+  // ---- A device may not push until it has heard the account's side ----
+  //
+  // The second gap from the #30 review, and it is not theoretical. Every local
+  // write stamps updatedAt to NOW, and the reconcile is newest-wins. The
+  // geocoder alone writes 33 times when a city first opens, each one a cache
+  // write that changes no content and restamps the whole guide to this second.
+  //
+  // So a device carrying a stale copy, one that was offline for a week, or one
+  // whose clock ran fast, only has to OPEN a city to make its stale copy look
+  // like the newest thing the account has ever seen. The 2s debounce then
+  // pushes it, and if that lands before the startup pull, the good copy on the
+  // server is overwritten by the bad one, with no edit and no tap from anybody.
+  //
+  // The gate: while signed in, nothing is pushed until this session has
+  // completed one successful pull. Queued work is kept, not dropped, and goes
+  // up the moment the account's side is known.
+  //
+  // A FAILED pull does not open the gate. That is the deliberate half: if this
+  // device cannot read the account, it has no way to know whether its copy is
+  // the newer one, and a device that cannot read has not earned the right to
+  // write. It retries; nothing is lost while it waits.
+  var firstPullDone = false;
+
   function schedulePush(kind, id) {
     // Re-adding a city with the same id must work, and so must editing one
     // back into existence. Both arrive here, and both mean the same thing: a
@@ -4628,6 +4733,12 @@
 
   function flushPush() {
     pushTimer = null;
+    if (session && !firstPullDone) {
+      // Keep the queue and come back. pullAll also flushes the moment it
+      // succeeds, so this timer is the belt to that braces.
+      pushTimer = setTimeout(flushPush, 1500);
+      return;
+    }
     var dataEntries = [];
     Object.keys(pushQueueData).forEach(function (id) {
       if (has(store.cities, id)) {
@@ -4707,6 +4818,15 @@
       applyPull(res[0], res[1], res[2]);
       stampSync();
       noteSyncWorking();
+      // The account's side is known now, so anything this device queued while
+      // it was waiting can go up. applyPull has already reconciled it against
+      // what came back, so what flushes here is the winner, not the stale copy.
+      firstPullDone = true;
+      if (Object.keys(pushQueueData).length || Object.keys(pushQueueState).length ||
+        pushQueueProfile) {
+        if (pushTimer) clearTimeout(pushTimer);
+        pushTimer = setTimeout(flushPush, 0);
+      }
       return true;
     }).catch(function (e) {
       warn('pull failed', e);
@@ -4873,6 +4993,10 @@
 
     var pulledNames = [];
     var rebootActive = false;
+    // Raised AFTER the pull finishes rather than mid-loop: activateCity reboots
+    // the city and rewrites the page, so a bar added during the loop would be
+    // wiped by the render that follows it.
+    var bigPulls = [];
 
     dataPlan.pull.forEach(function (id) {
       var row = remoteData[id];
@@ -4882,6 +5006,21 @@
       // payload does not derive the city id it claims to be filed under.
       if (CityOps.validate(row.data).length) { warn('skipped invalid remote city ' + id); return; }
       if (CityOps.cityId(row.data) !== id) { warn('skipped mismatched remote city ' + id); return; }
+      // The pull's own destructive write: this replaces a local city wholesale
+      // whenever the remote row is stamped newer, and before this there was
+      // nothing to go back to. A device that has been offline with stale data,
+      // or one whose clock ran fast, can carry a worse copy than the one it
+      // lands on.
+      var localBefore = has(store.cities, id) ? store.cities[id] : null;
+      if (localBefore) {
+        var pullDmg = CityOps.promptKit.replaceDamage(localBefore, row.data);
+        if (pullDmg.removed > 0) {
+          keepSnapshot(id, localBefore, 'pull');
+          if (CityOps.promptKit.isBigReplace(localBefore, row.data)) {
+            bigPulls.push({ id: id, before: clone(localBefore), after: clone(row.data) });
+          }
+        }
+      }
       var res = CityOps.appStore.add(store, row.data, row.updated_at || CityOps.syncKit.EPOCH);
       store = res.store;
       if (id === activeId) rebootActive = true;
@@ -4928,6 +5067,16 @@
     pushNow('data', dataEntries);
     pushNow('state', stateEntries);
 
+    if (bigPulls.length) {
+      // One bar, the active city first: a traveler looking at Istanbul needs
+      // to hear about Istanbul, and a stack of bars is a wall nobody reads.
+      var pick = null;
+      bigPulls.forEach(function (p) { if (!pick && p.id === activeId) pick = p; });
+      if (!pick) pick = bigPulls[0];
+      setTimeout(function () {
+        showReplaceUndoBar(pick.id, pick.before, pick.after, 'another device');
+      }, 0);
+    }
     if (rebootActive && has(store.cities, activeId)) {
       var y = 0;
       try { y = window.scrollY || window.pageYOffset || 0; } catch (e) {}
@@ -5012,6 +5161,9 @@
       } catch (e) {}
     }
     saveSession(null);
+    // The next sign-in is a different account until proven otherwise, so it
+    // pulls before it pushes like any other cold start.
+    firstPullDone = false;
     // Same reasoning as dropSession: re-seed rather than empty, so the next
     // real edit pushes instead of being spent on a baseline.
     stateStamp = seedStateStamps();
