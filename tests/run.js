@@ -2322,6 +2322,55 @@ test('the undo bar says what was lost before it says where it came from', () => 
   assert.equal(k.replaceUndoText(before, one, ''), '34 places became 33. 1 place went.');
 });
 
+test('the first stay in a city inherits the city dates, the second does not', () => {
+  // Rob, 2026-09-21: he rarely stays in two places in one city, so the two
+  // dates already on the city card were being retyped every time. Driven
+  // through the SHIPPED addAccommodation from the built trip page.
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'trip', 'index.html'), 'utf8');
+  const start = html.indexOf('function addAccommodation(');
+  assert.ok(start !== -1, 'addAccommodation is missing from the assembled trip page');
+  const end = html.indexOf('\n}\n', start);
+  const src = html.slice(start, end + 3);
+
+  function run(city) {
+    const state = { cities: [city] };
+    let n = 0;
+    const fn = new Function('state', 'newId', 'openAccomIds', 'saveState', 'repaint',
+      src + '\nreturn addAccommodation;');
+    fn(state, function () { return 'acc' + (++n); },
+      { add: function () {} }, function () {}, function () {})(city.id);
+    return state.cities[0].accommodations;
+  }
+
+  const dated = { id: 'c1', name: 'Istanbul', checkIn: '2026-09-16', checkOut: '2026-09-25',
+    accommodations: [] };
+  let accs = run(dated);
+  assert.equal(accs.length, 1);
+  assert.equal(accs[0].checkIn, '2026-09-16', 'the first stay did not inherit the city check-in');
+  assert.equal(accs[0].checkOut, '2026-09-25', 'the first stay did not inherit the city check-out');
+  // Still an ordinary editable row: nothing is locked, and the status is the
+  // same "considering" a hand-typed stay gets.
+  assert.equal(accs[0].status, 'considering');
+
+  // The SECOND stay starts empty. There is no sensible guess for where one bed
+  // ends and the next begins, and wrong dates in a booking row are worse than
+  // empty ones.
+  accs = run({ id: 'c1', name: 'Istanbul', checkIn: '2026-09-16', checkOut: '2026-09-25',
+    accommodations: [{ id: 'old', checkIn: '2026-09-16', checkOut: '2026-09-20' }] });
+  assert.equal(accs.length, 2);
+  const fresh = accs.filter((a) => a.id !== 'old')[0];
+  assert.equal(fresh.checkIn, '', 'the second stay guessed dates it cannot know');
+  assert.equal(fresh.checkOut, '');
+
+  // A city with no dates of its own inherits nothing, rather than writing
+  // "undefined" into a date field.
+  accs = run({ id: 'c2', name: 'Nowhere', accommodations: [] });
+  assert.equal(accs[0].checkIn, '');
+  assert.equal(accs[0].checkOut, '');
+});
+
 test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
   // 18 of Rob's 35 Istanbul places were searched and are simply not in
   // OpenStreetMap; 2 more have no address to search on. Query tuning cannot
