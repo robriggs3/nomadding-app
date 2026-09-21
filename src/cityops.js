@@ -7148,7 +7148,20 @@ var CityOps = (function () {
   // server's answer is the one that counts.
   var AI_MANAGED_TIERS = ['managed', 'complimentary'];
 
-  // ctx: {hasKey, tier, entitled, signedIn}
+  // ctx: {hasKey, tier, entitled, signedIn, sessionStuck}
+  //
+  // `sessionStuck` is the honest completion of this function, added 2026-09-21.
+  // `signedIn` only ever meant "a session OBJECT exists on this device", and
+  // that stays true through an expired access token and through a refresh that
+  // is failing over and over. So the app offered one-tap AI on our key, the
+  // traveler pressed it, and the request refused: the modal had promised
+  // something the session could not deliver. That is what made Rob's 2026-09-06
+  // night opaque, and the shell has been counting consecutive refresh failures
+  // for the sync banner the whole time without this ever reading the count.
+  //
+  // A stuck session is not entitled to the proxy, because the proxy needs a
+  // token this device cannot currently produce. It says so instead, and the
+  // copy-a-prompt path, which needs nothing, is still right there.
   //
   // `entitled` is asked FIRST and for both transports, because one-tap AI is
   // what a plan buys whichever key it runs on: that is what the gate copy has
@@ -7158,9 +7171,26 @@ var CityOps = (function () {
   function aiTransport(c) {
     var o = c || {};
     if (!o.entitled) return 'none';
+    // A key of this device's own needs no session at all, so a stuck session
+    // is irrelevant to it. This order matters: a subscriber who also saved a
+    // key keeps working through a refresh outage.
     if (o.hasKey) return 'direct';
     if (!o.signedIn) return 'none';
+    if (o.sessionStuck) return 'none';
     return AI_MANAGED_TIERS.indexOf(o.tier) === -1 ? 'none' : 'proxy';
+  }
+
+  // Why there is no one-tap run right now, for a caller that already knows
+  // there is none. Lets the shells say the true sentence instead of the
+  // generic one: "save a key" is wrong advice for a subscriber whose session
+  // simply needs signing in again.
+  function aiNoTransportReason(c) {
+    var o = c || {};
+    if (aiTransport(o) !== 'none') return '';
+    if (!o.entitled) return 'not-entitled';
+    if (!o.signedIn) return 'signed-out';
+    if (o.sessionStuck) return 'session-stuck';
+    return 'no-tier';
   }
 
   // ---- web search on the traveler's own key (B1) ----
@@ -10552,7 +10582,8 @@ var CityOps = (function () {
       LARGE_CALL_MIN_TOKENS: AI_LARGE_CALL_MIN_TOKENS,
       LARGE_CALLS_PER_HOUR: AI_LARGE_CALLS_PER_HOUR,
       MANAGED_TIERS: AI_MANAGED_TIERS,
-      transport: aiTransport, url: aiProxyUrl,
+      transport: aiTransport,
+      noTransportReason: aiNoTransportReason, url: aiProxyUrl,
       meter: aiMeter, pauseMessage: aiPauseMessage, guides: aiGuides,
       // Which key the next tap spends, in one sentence, for the modals to
       // print above the button. Pure, so the shells never decide it twice.

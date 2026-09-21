@@ -9698,6 +9698,12 @@ let _refreshInFlight = null;
 let _pullInFlight = false;
 let _lastPullAt = 0;
 let _refreshTrouble = 0;
+// The line between "a refresh blipped" and "this session cannot produce a
+// token". One number for BOTH the sync banner and the AI transport, so this
+// surface can never say sync is stuck while still offering a one-tap run that
+// needs the very token it cannot get. Twin of REFRESH_TROUBLE_LIMIT on the
+// guide side.
+const REFRESH_TROUBLE_LIMIT = 3;
 let _alertHiddenForNow = false;
 let _syncSafetySnapshotTaken = false;
 
@@ -9896,7 +9902,7 @@ function renderSyncAlert() {
 // rather than discover on the next device.
 function noteRefreshTrouble() {
   _refreshTrouble++;
-  if (_refreshTrouble >= 3) raiseSyncAlert('stuck');
+  if (_refreshTrouble >= REFRESH_TROUBLE_LIMIT) raiseSyncAlert('stuck');
 }
 
 function noteSyncWorking() {
@@ -10517,13 +10523,20 @@ function entGateToast(action) {
 // The DECISION is CityOps.aiProxyKit.transport, pure and unit tested and shared
 // with the city surface, because the two surfaces share an account and must
 // never disagree about what it can do.
-function aiTransportNow() {
-  return CityOps.aiProxyKit.transport({
+function aiTransportCtx() {
+  return {
     hasKey: !!credGet('anthropic'),
     tier: (_entRow && _entRow.row && _entRow.row.tier) || '',
     entitled: entAllows(),
-    signedIn: _entMocked || syncSignedIn()
-  });
+    signedIn: _entMocked || syncSignedIn(),
+    // Not "is there a session" but "can this session still get a token". The
+    // mock is exempt: it has no refresh to fail.
+    sessionStuck: !_entMocked && _refreshTrouble >= REFRESH_TROUBLE_LIMIT
+  };
+}
+
+function aiTransportNow() {
+  return CityOps.aiProxyKit.transport(aiTransportCtx());
 }
 
 // ---- the managed-AI meter ----
@@ -10576,6 +10589,14 @@ function apiAiWhyNot() {
 // Never a bare refusal. Whatever is missing, the prompt path in the same modal
 // still works and is named.
 function aiNoTransportText() {
+  // Asked first among the signed-in cases: a subscriber whose session cannot
+  // refresh does not need to be told to add a key. He needs the truth, which
+  // is that signing in again fixes it.
+  if (CityOps.aiProxyKit.noTransportReason(aiTransportCtx()) === 'session-stuck') {
+    return 'This device cannot refresh your sign-in right now, so AI on our key has nothing to ' +
+      'authenticate with. Sign in again from Settings and it comes straight back. Prompt mode ' +
+      'works in the meantime, free, and nothing here is lost.';
+  }
   if (!syncSignedIn() && !_entMocked) {
     return 'Add an Anthropic API key in Settings to run this in one tap, or use Prompt mode and ' +
       'paste the answer back. Prompt mode is free and always will be.';
