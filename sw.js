@@ -1,6 +1,7 @@
 // CityOps app-shell service worker. Bump CACHE on each release.
 <<<<<<< HEAD
-var CACHE = 'cityops-app-2a7d6968b9e9';
+<<<<<<< HEAD
+var CACHE = 'cityops-app-159df2226013';
 =======
 <<<<<<< HEAD
 var CACHE = 'cityops-app-d72fd85fc8d9';
@@ -8,6 +9,9 @@ var CACHE = 'cityops-app-d72fd85fc8d9';
 var CACHE = 'cityops-app-194897e20d4e';
 >>>>>>> 7151676 (The first stay in a city already knows its dates)
 >>>>>>> 4f90af4 (The first stay in a city already knows its dates)
+=======
+var CACHE = 'cityops-app-1a7bd73f1fa2';
+>>>>>>> 4794410 (Typing a stay name stops dragging the page down)
 // Both surfaces of the app, because both are things a traveler opens with no
 // signal. The fetch handler is cache-first with a background refresh, so
 // without the bump above a phone would serve the previous build once after
