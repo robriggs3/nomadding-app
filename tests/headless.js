@@ -230,6 +230,84 @@ async function open(browser, city, opts) {
     assert.equal(e.errors.length, 0, e.errors.join(' | '));
   });
 
+  // 6. A DIALOG MUST WIN AGAINST THE MAP.
+  //
+  // Leaflet numbers its own furniture in the hundreds: .leaflet-pane is 400 and
+  // its controls are 1000, written for a map that owns the page.
+  // .leaflet-container starts no stacking context of its own, so those numbers
+  // used to compete at the top level against the app's dialogs at 100.
+  // Screenshot from Rob 2026-09-21: the sign-in sheet with the Plan map punched
+  // through it, only the buttons below the map still visible. Reproduced here
+  // before the fix: elementFromPoint at the map's centre returned a marker.
+  //
+  // The overlap is the only place the two compete, so that is where this looks.
+  // A check at the dialog's centre passes on a broken build, because the centre
+  // usually sits below the map.
+  const f = await open(browser, PLACED);
+  // The app's own dialog markup, built into the app's own #modal host: this is
+  // exactly what modalShell() produces. The thing under test is the CSS
+  // stacking contract, not the route to the sheet, so this asserts the
+  // contract without adding a production hook that exists only for a test.
+  const opened = await f.page.evaluate(() => {
+    const host = document.getElementById('modal');
+    if (!host) return false;
+    host.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'modal-wrap';
+    const box = document.createElement('div');
+    box.className = 'modal';
+    const h = document.createElement('h3');
+    h.textContent = 'Sign in to sync';
+    box.appendChild(h);
+    const p = document.createElement('p');
+    p.textContent = 'Your cities and your progress follow you to your other devices.';
+    box.appendChild(p);
+    const b = document.createElement('button');
+    b.textContent = 'Send magic link';
+    box.appendChild(b);
+    wrap.appendChild(box);
+    host.appendChild(wrap);
+    return true;
+  });
+  await f.page.waitForTimeout(400);
+  const stack = await f.page.evaluate(() => {
+    const m = document.querySelector('.modal');
+    const lc = document.querySelector('.leaflet-container');
+    if (!m || !lc) return { modal: !!m, map: !!lc };
+    const lr = lc.getBoundingClientRect();
+    const cx = Math.round(lr.left + lr.width / 2), cy = Math.round(lr.top + lr.height / 2);
+    const hit = document.elementFromPoint(cx, cy);
+    const wrap = document.querySelector('.modal-wrap');
+    const pane = document.querySelector('.leaflet-pane');
+    return { modal: true, map: true,
+      hitInsideDialog: !!(hit && m.contains(hit)),
+      hitIsLeaflet: !!(hit && hit.closest && hit.closest('.leaflet-container')),
+      wrapZ: Number(getComputedStyle(wrap).zIndex) || 0,
+      paneZ: Number(getComputedStyle(pane).zIndex) || 0,
+      blockIsolated: (function () {
+        const b = document.querySelector('.mapblock');
+        if (!b) return null;
+        const cs = getComputedStyle(b);
+        return cs.isolation === 'isolate' || cs.zIndex === '0';
+      })() };
+  });
+  check('a dialog is not punched through by the map underneath it', () => {
+    assert.ok(opened, 'the app has no #modal host, so the dialog had nowhere to go');
+    assert.ok(stack.modal, 'the sign-in sheet never opened, so this proved nothing');
+    assert.ok(stack.map, 'no map on the page, so this proved nothing');
+    assert.equal(stack.hitIsLeaflet, false,
+      'the map is on top of the dialog where they overlap: ' + JSON.stringify(stack));
+    assert.equal(stack.hitInsideDialog, true,
+      'the dialog does not receive the tap where the map overlaps it: ' + JSON.stringify(stack));
+    assert.ok(stack.blockIsolated,
+      '.mapblock starts no stacking context, so Leaflet 400/1000 still compete with the app');
+    assert.ok(stack.wrapZ > 1000,
+      'the dialog layer sits at ' + stack.wrapZ + ', below what Leaflet gives its own controls');
+  });
+  check('the dialog-over-map check logged no page errors', () => {
+    assert.equal(f.errors.length, 0, f.errors.join(' | '));
+  });
+
   await browser.close();
   console.log(failed ? failed + ' headless check(s) failed' : 'all headless checks passed');
   process.exit(failed ? 1 : 0);
