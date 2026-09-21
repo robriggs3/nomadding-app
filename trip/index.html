@@ -19337,11 +19337,24 @@ function addAccommodation(cityId) {
   if (!c) return;
   if (!c.accommodations) c.accommodations = [];
   const id = newId();
-  // Prepend + leave dates empty so it floats to the top of the section (dateless = unscheduled,
-  // sorted first) right where the "+ Add stay" button is, ready to fill in.
+  // THE FIRST STAY IN A CITY INHERITS THE CITY'S DATES.
+  //
+  // Most stops are one bed for the whole stay, so retyping the two dates that
+  // are already on the city card is work the app can do itself. They are
+  // ordinary editable fields afterwards: anybody splitting a stay across two
+  // places changes them, and the second stay onwards still starts empty
+  // because there is no sensible guess for where one ends and the next begins.
+  //
+  // Only when the city HAS dates. Inheriting '' from an undated city would
+  // just be the old behaviour with more code.
+  const firstStay = c.accommodations.length === 0;
+  // Prepend so it floats to the top of the section right where the "+ Add stay"
+  // button is, ready to fill in. A dateless stay sorts first as unscheduled;
+  // a dated first stay is the only one in the list, so nothing moves under it.
   c.accommodations.unshift({
     id, name: '', link: '', neighborhood: '', city: '',
-    checkIn: '', checkOut: '',
+    checkIn: firstStay ? (c.checkIn || '') : '',
+    checkOut: firstStay ? (c.checkOut || '') : '',
     cost: '', currency: 'USD', status: 'considering', paid: false, notes: ''
   });
   openAccomIds.add(id);   // open it immediately as an editable box
