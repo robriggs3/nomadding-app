@@ -695,6 +695,20 @@
     min-width: 60px;
   }
   .accom-name:focus { background: var(--accent-soft); }
+  /* The rename field is a REAL input, not the div made editable.
+     Measured on the live app 2026-09-21, iPhone 13, typing five characters in
+     the stay row: the contenteditable scrolled the page on every keystroke
+     (4442 -> 4447, five times), while every <input> in the same row on the
+     same page held still. Mobile Safari and mobile Chromium scroll the caret
+     into view far more eagerly on contenteditable, and there is no way to ask
+     them not to. An input does not need asking.
+     Styled to match the div exactly, so renaming looks like editing the title
+     rather than a form appearing. */
+  .accom-name-input {
+    font-weight: 500; outline: none; padding: 2px 4px; border-radius: 3px; font-size: 14px;
+    min-width: 60px; font-family: inherit; color: inherit;
+    background: var(--accent-soft); border: none;
+  }
   .accom-name:empty:before {
     content: attr(data-placeholder);
     color: var(--text-3); font-style: italic; font-weight: 400;
@@ -4327,39 +4341,61 @@ function buildAccommodation(city, acc) {
   name.className = 'accom-name';
   // Name is NOT contentEditable by default, clicking it toggles the accordion (matches
   // intuitive accordion-header behavior). Double-click to enter rename mode.
-  name.contentEditable = 'false';
   name.textContent = acc.name || '';
   name.dataset.placeholder = 'Property name';
   name.style.cursor = 'pointer';
   if (!acc.name) name.style.color = 'var(--text-3)';
-  // Double-click → enter edit mode (focus + select-all so user can immediately type over)
-  name.addEventListener('dblclick', (e) => {
-    e.stopPropagation();
-    name.contentEditable = 'true';
-    name.style.color = '';
-    name.focus();
-    // Select-all so a single keystroke replaces the old name
-    const range = document.createRange();
-    range.selectNodeContents(name);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-  });
-  name.addEventListener('blur', () => {
-    name.contentEditable = 'false';
-    const v = name.textContent.trim();
-    if (!v) {
-      name.textContent = '';
-      name.style.color = 'var(--text-3)';
-    }
-    updateAccom(cityId, accId, 'name', v);
-  });
-  // Pressing Enter while editing → save and exit edit mode
-  name.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      name.blur();
-    }
+
+  // RENAMING USES A REAL INPUT, NOT contentEditable ON THIS DIV.
+  //
+  // Rob, mid-trip: typing in the stay row jumped the page down on every
+  // keystroke. Reproduced on the live app 2026-09-21 under iPhone 13: the
+  // property name moved the page 4442 -> 4447 on each of five characters,
+  // while every <input> in the same row on the same page held still, and the
+  // same contenteditable was rock steady at desktop width. Mobile browsers
+  // scroll the caret into view far more eagerly on contenteditable, and
+  // nothing in the API asks them not to.
+  //
+  // The div stays as the accordion header, so a single tap still opens and
+  // closes the row. Double-tap swaps in the input, and it commits on blur or
+  // Enter exactly as before: no re-render while typing, no state written per
+  // keystroke.
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'accom-name-input';
+  nameInput.placeholder = 'Property name';
+  nameInput.hidden = true;
+
+  function startRename() {
+    nameInput.value = acc.name || '';
+    name.hidden = true;
+    nameInput.hidden = false;
+    nameInput.focus();
+    nameInput.select();
+  }
+
+  function endRename(commit) {
+    if (nameInput.hidden) return;
+    const v = commit ? nameInput.value.trim() : (acc.name || '');
+    nameInput.hidden = true;
+    name.hidden = false;
+    name.textContent = v;
+    name.style.color = v ? '' : 'var(--text-3)';
+    // Only when it actually changed: updateAccom repaints, and repainting the
+    // page because somebody opened and closed a field without editing it is
+    // the same class of jump this whole change is about.
+    if (commit && v !== (acc.name || '')) updateAccom(cityId, accId, 'name', v);
+  }
+
+  name.addEventListener('dblclick', (e) => { e.stopPropagation(); startRename(); });
+  nameInput.addEventListener('click', (e) => e.stopPropagation());
+  nameInput.addEventListener('dblclick', (e) => e.stopPropagation());
+  nameInput.addEventListener('blur', () => endRename(true));
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); }
+    // Escape abandons the edit and puts the old name back, which a
+    // commit-on-blur field needs or there is no way out of a typo.
+    else if (e.key === 'Escape') { e.preventDefault(); endRename(false); }
   });
   // Small "rename" hint that appears on row hover, so the double-click affordance is discoverable
   const renameHint = document.createElement('span');
@@ -4368,6 +4404,7 @@ function buildAccommodation(city, acc) {
   nameWrap.style.display = 'flex';
   nameWrap.style.alignItems = 'baseline';
   nameWrap.appendChild(name);
+  nameWrap.appendChild(nameInput);
   nameWrap.appendChild(renameHint);
 
   const linkRow = document.createElement('div');

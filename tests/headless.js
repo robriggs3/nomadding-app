@@ -8,7 +8,7 @@
 // Two fixtures on purpose. One with coordinates already cached, which must
 // produce real markers immediately and offline. One with none, which must
 // still produce a map canvas, because that is the case that broke.
-const { chromium } = require('playwright');
+const { chromium, devices } = require('playwright');
 const path = require('path');
 const assert = require('assert');
 
@@ -70,6 +70,36 @@ async function open(browser, city, opts) {
   await page.goto('file://' + path.join(__dirname, '..', 'index.html'),
     { waitUntil: 'load', timeout: 45000 });
   await page.waitForTimeout(opts && opts.offline ? 2500 : 6000);
+  return { page, errors };
+}
+
+// The trip surface has its own storage key and its own page, so it needs its
+// own opener. `mobile` matters: the bug this exists for does not exist at
+// desktop width.
+const TRIP_CITIES = (function () {
+  const out = [];
+  for (let i = 1; i <= 6; i++) {
+    out.push({ id: 'c' + i, name: 'City ' + i, country: 'Turkey',
+      checkIn: '2026-10-0' + i, checkOut: '2026-10-1' + i, state: '', status: 'confirmed',
+      notes: '', estimatedCost: '1200', lat: '41.0', lng: '28.9',
+      accommodations: [], neighborhoods: [], attractions: [], restaurants: [],
+      dayTrips: [], coworking: [], friends: [] });
+  }
+  return out;
+})();
+
+async function openTrip(browser, mobile) {
+  const ctx = await browser.newContext(mobile
+    ? { ...devices['iPhone 13'] }
+    : { viewport: { width: 1280, height: 800 } });
+  await ctx.addInitScript(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) {} },
+    ['planahead:v1', JSON.stringify({ cities: TRIP_CITIES })]);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e.message).slice(0, 140)));
+  await page.goto('file://' + path.join(__dirname, '..', 'trip', 'index.html'),
+    { waitUntil: 'load', timeout: 45000 });
+  await page.waitForTimeout(1200);
   return { page, errors };
 }
 
@@ -307,6 +337,67 @@ async function open(browser, city, opts) {
   check('the dialog-over-map check logged no page errors', () => {
     assert.equal(f.errors.length, 0, f.errors.join(' | '));
   });
+
+  // 7. TYPING A STAY NAME MUST NOT MOVE THE PAGE.
+  //
+  // Rob, mid-trip: typing in the Stay & Travel stay row jumped the page down on
+  // every keystroke. Measured on the live app 2026-09-21 under iPhone 13, the
+  // property name moved the page 4442 -> 4447 on each of five characters,
+  // while every <input> in the same row held still and the same field was rock
+  // steady at desktop width. It was a contenteditable div; mobile browsers
+  // scroll the caret into view far more eagerly on those.
+  //
+  // PHONE WIDTH IS THE POINT. A desktop-only version of this check passes on
+  // the broken build, which is why the bug survived my first three attempts to
+  // reproduce it.
+  for (const mobile of [true, false]) {
+    const t = await openTrip(browser, mobile);
+    const label = mobile ? 'phone' : 'desktop';
+    await t.page.evaluate(() => { openCityIds.add('c6'); repaint(); addAccommodation('c6'); });
+    await t.page.waitForTimeout(700);
+    const nm = t.page.locator('.accom-item.open .accom-name').first();
+    await nm.scrollIntoViewIfNeeded();
+    await t.page.waitForTimeout(250);
+    await nm.dblclick();
+    await t.page.waitForTimeout(300);
+    const y0 = await t.page.evaluate(() => window.scrollY);
+    const editing = await t.page.evaluate(() => {
+      const i = document.querySelector('.accom-item.open .accom-name-input');
+      return { isInput: !!(i && !i.hidden), focused: !!(i && document.activeElement === i),
+        stillContentEditable: !!document.querySelector('.accom-item.open .accom-name[contenteditable="true"]') };
+    });
+    const ys = [];
+    for (const ch of ['H', 'o', 't', 'e', 'l']) {
+      await t.page.keyboard.type(ch);
+      await t.page.waitForTimeout(140);
+      ys.push(await t.page.evaluate(() => window.scrollY));
+    }
+    await t.page.keyboard.press('Enter');
+    await t.page.waitForTimeout(700);
+    const saved = await t.page.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem('planahead:v1') || '{}');
+      const c = (raw.cities || []).find((x) => x.id === 'c6');
+      return c && c.accommodations && c.accommodations[0] ? c.accommodations[0].name : null;
+    });
+    const moved = ys.filter((y) => y !== y0).length;
+    check('typing a stay name does not scroll the page (' + label + ')', () => {
+      assert.equal(editing.isInput, true,
+        label + ': renaming is not using a real input: ' + JSON.stringify(editing));
+      assert.equal(editing.focused, true, label + ': the rename field never took focus');
+      assert.equal(editing.stillContentEditable, false,
+        label + ': the name is still a contenteditable, which is the bug');
+      assert.equal(moved, 0,
+        label + ': the page moved on ' + moved + ' of 5 keystrokes, from ' + y0 +
+        ' to ' + JSON.stringify(ys));
+    });
+    check('a renamed stay keeps its name (' + label + ')', () => {
+      assert.equal(saved, 'Hotel',
+        label + ': the rename did not commit, so the fix traded a jump for lost data');
+    });
+    check('the stay rename walk logged no page errors (' + label + ')', () => {
+      assert.equal(t.errors.length, 0, t.errors.join(' | '));
+    });
+  }
 
   await browser.close();
   console.log(failed ? failed + ' headless check(s) failed' : 'all headless checks passed');
