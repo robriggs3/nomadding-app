@@ -2434,6 +2434,13 @@ var CityOps = (function () {
     { id: 'other', label: 'Other', color: '#52525b' }
   ];
 
+  // A place already done is context, not a candidate. It still earns a pin,
+  // because "I ate there on Tuesday" is exactly what makes the pin next to it
+  // interesting, but it stops competing for attention with what is still
+  // ahead. Grey, and outside the category colours entirely, so a done dinner
+  // never reads as a dinner still to book.
+  var DONE_COLOR = '#9aa3a2';
+
   function mapCategories() {
     return MAP_CATEGORIES.map(function (c) { return { id: c.id, label: c.label, color: c.color }; });
   }
@@ -2719,7 +2726,18 @@ var CityOps = (function () {
 
   // Everything the map needs for a set of items: the ones it can draw, and the
   // ones it cannot, which the page lists underneath rather than hiding.
-  function mapPoints(data, items) {
+  // Session-only, and deliberately NOT persisted. A filter that quietly
+  // survives a reload is how a traveler opens the app next week, finds half
+  // his guide missing from the map, and concludes it lost his data. Hiding is
+  // something you do for a minute while you look at something else; it resets.
+  var hideDoneOnMaps = false;
+
+  function hideDoneNow() { return hideDoneOnMaps; }
+
+  function setHideDone(v) { hideDoneOnMaps = !!v; return hideDoneOnMaps; }
+
+  function mapPoints(data, items, opts) {
+    var o = opts || {};
     var list = Array.isArray(items) ? items : ((data && data.items) || []);
     var secById = {};
     ((data && data.sections) || []).forEach(function (s) { if (s && s.id) secById[s.id] = s; });
@@ -2729,12 +2747,19 @@ var CityOps = (function () {
       var p = itemPoint(it);
       var cat = mapCategory(secById[it.section] || { id: it.section });
       if (p) {
+        var isDone = it.status === 'done';
+        // Hidden means GONE from the map, which is what was asked for. Dimming
+        // was already spent on Near, and two kinds of faint pin on one map is
+        // no signal at all.
+        if (isDone && o.hideDone) return;
         // NUMBERED to match the list beneath, in LIST order, not by distance:
         // the list is the thing the traveler arranges by hand, so "the third
         // one down" and "pin 3" have to be the same object.
         points.push({ id: it.id, n: points.length + 1,
           name: it.name || it.id, section: it.section,
-          category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
+          category: cat, color: isDone ? DONE_COLOR : mapColor(cat),
+          done: isDone,
+          lat: p.lat, lng: p.lng, source: p.source,
           byHand: isHandPlaced(it), day: it.day || null });
       } else {
         var why = placeholderReason(it) ? 'looks like example text, not a real place'
@@ -10055,9 +10080,23 @@ var CityOps = (function () {
     return out;
   }
 
+  // How many done places this map COULD show, whether or not it is showing
+  // them. Same list the map was built from, so the number on the button always
+  // matches what the button would do.
+  function countDone(data, items) {
+    var list = Array.isArray(items) ? items : ((data && data.items) || []);
+    var n = 0;
+    list.forEach(function (it) {
+      if (!it || it.status !== 'done') return;
+      if (!itemPoint(it)) return;
+      n++;
+    });
+    return n;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
-    var r = mapPoints(data, items);
+    var r = mapPoints(data, items, { hideDone: hideDoneOnMaps });
     var wrap = el('div', 'mapblock');
     if (!r.points.length && !r.missing.length) return null;
 
@@ -10103,7 +10142,7 @@ var CityOps = (function () {
 
       if (o.legend !== false) {
         var seen = {};
-        r.points.forEach(function (p) { seen[p.category] = 1; });
+        r.points.forEach(function (p) { if (!p.done) seen[p.category] = 1; });
         var legend = el('div', 'maplegend');
         mapCategories().forEach(function (c) {
           if (!seen[c.id]) return;
@@ -10114,6 +10153,37 @@ var CityOps = (function () {
           chip.appendChild(el('span', null, c.label));
           legend.appendChild(chip);
         });
+        // The done key, and the control that removes them, together: the chip
+        // explains the grey and the button acts on it, so the legend answers
+        // "what is that grey one" and "I do not want to see them" in one place.
+        //
+        // Counted from the WHOLE list rather than from r.points, because when
+        // they are hidden r.points has none of them and the way back would
+        // disappear with them. That is the bug this ordering prevents: a
+        // toggle you can turn on and not off.
+        var doneCount = countDone(data, items);
+        if (doneCount) {
+          var doneChip = el('span', 'mapkey');
+          var doneDot = el('span', 'mapdot');
+          doneDot.style.background = DONE_COLOR;
+          doneChip.appendChild(doneDot);
+          doneChip.appendChild(el('span', null, 'Done'));
+          legend.appendChild(doneChip);
+
+          var t = el('button', 'mapkey linklike hide-done',
+            hideDoneOnMaps ? 'Show done (' + doneCount + ')' : 'Hide done (' + doneCount + ')');
+          t.type = 'button';
+          t.setAttribute('aria-pressed', hideDoneOnMaps ? 'true' : 'false');
+          t.title = hideDoneOnMaps
+            ? 'Put the places you have already done back on every map'
+            : 'Take the places you have already done off every map';
+          t.onclick = function (ev) {
+            ev.stopPropagation();
+            setHideDone(!hideDoneOnMaps);
+            rerender();
+          };
+          legend.appendChild(t);
+        }
         wrap.appendChild(legend);
       }
     }
@@ -12055,6 +12125,7 @@ var CityOps = (function () {
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       placeByHand: placeByHand, clearPoint: clearPoint, isHandPlaced: isHandPlaced,
       haversineM: haversineM, walkMinutes: walkMinutes, nearby: nearbyOf,
+      hideDone: hideDoneNow, setHideDone: setHideDone, DONE_COLOR: DONE_COLOR,
       nearSummary: nearSummaryText, nearUnavailable: nearUnavailableText,
       NEAR_RADIUS_M: NEAR_RADIUS_M,
       shortName: shortName,
@@ -14345,6 +14416,13 @@ var CityOps = (function () {
     { id: 'other', label: 'Other', color: '#52525b' }
   ];
 
+  // A place already done is context, not a candidate. It still earns a pin,
+  // because "I ate there on Tuesday" is exactly what makes the pin next to it
+  // interesting, but it stops competing for attention with what is still
+  // ahead. Grey, and outside the category colours entirely, so a done dinner
+  // never reads as a dinner still to book.
+  var DONE_COLOR = '#9aa3a2';
+
   function mapCategories() {
     return MAP_CATEGORIES.map(function (c) { return { id: c.id, label: c.label, color: c.color }; });
   }
@@ -14630,7 +14708,18 @@ var CityOps = (function () {
 
   // Everything the map needs for a set of items: the ones it can draw, and the
   // ones it cannot, which the page lists underneath rather than hiding.
-  function mapPoints(data, items) {
+  // Session-only, and deliberately NOT persisted. A filter that quietly
+  // survives a reload is how a traveler opens the app next week, finds half
+  // his guide missing from the map, and concludes it lost his data. Hiding is
+  // something you do for a minute while you look at something else; it resets.
+  var hideDoneOnMaps = false;
+
+  function hideDoneNow() { return hideDoneOnMaps; }
+
+  function setHideDone(v) { hideDoneOnMaps = !!v; return hideDoneOnMaps; }
+
+  function mapPoints(data, items, opts) {
+    var o = opts || {};
     var list = Array.isArray(items) ? items : ((data && data.items) || []);
     var secById = {};
     ((data && data.sections) || []).forEach(function (s) { if (s && s.id) secById[s.id] = s; });
@@ -14640,12 +14729,19 @@ var CityOps = (function () {
       var p = itemPoint(it);
       var cat = mapCategory(secById[it.section] || { id: it.section });
       if (p) {
+        var isDone = it.status === 'done';
+        // Hidden means GONE from the map, which is what was asked for. Dimming
+        // was already spent on Near, and two kinds of faint pin on one map is
+        // no signal at all.
+        if (isDone && o.hideDone) return;
         // NUMBERED to match the list beneath, in LIST order, not by distance:
         // the list is the thing the traveler arranges by hand, so "the third
         // one down" and "pin 3" have to be the same object.
         points.push({ id: it.id, n: points.length + 1,
           name: it.name || it.id, section: it.section,
-          category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
+          category: cat, color: isDone ? DONE_COLOR : mapColor(cat),
+          done: isDone,
+          lat: p.lat, lng: p.lng, source: p.source,
           byHand: isHandPlaced(it), day: it.day || null });
       } else {
         var why = placeholderReason(it) ? 'looks like example text, not a real place'
@@ -21966,9 +22062,23 @@ var CityOps = (function () {
     return out;
   }
 
+  // How many done places this map COULD show, whether or not it is showing
+  // them. Same list the map was built from, so the number on the button always
+  // matches what the button would do.
+  function countDone(data, items) {
+    var list = Array.isArray(items) ? items : ((data && data.items) || []);
+    var n = 0;
+    list.forEach(function (it) {
+      if (!it || it.status !== 'done') return;
+      if (!itemPoint(it)) return;
+      n++;
+    });
+    return n;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
-    var r = mapPoints(data, items);
+    var r = mapPoints(data, items, { hideDone: hideDoneOnMaps });
     var wrap = el('div', 'mapblock');
     if (!r.points.length && !r.missing.length) return null;
 
@@ -22014,7 +22124,7 @@ var CityOps = (function () {
 
       if (o.legend !== false) {
         var seen = {};
-        r.points.forEach(function (p) { seen[p.category] = 1; });
+        r.points.forEach(function (p) { if (!p.done) seen[p.category] = 1; });
         var legend = el('div', 'maplegend');
         mapCategories().forEach(function (c) {
           if (!seen[c.id]) return;
@@ -22025,6 +22135,37 @@ var CityOps = (function () {
           chip.appendChild(el('span', null, c.label));
           legend.appendChild(chip);
         });
+        // The done key, and the control that removes them, together: the chip
+        // explains the grey and the button acts on it, so the legend answers
+        // "what is that grey one" and "I do not want to see them" in one place.
+        //
+        // Counted from the WHOLE list rather than from r.points, because when
+        // they are hidden r.points has none of them and the way back would
+        // disappear with them. That is the bug this ordering prevents: a
+        // toggle you can turn on and not off.
+        var doneCount = countDone(data, items);
+        if (doneCount) {
+          var doneChip = el('span', 'mapkey');
+          var doneDot = el('span', 'mapdot');
+          doneDot.style.background = DONE_COLOR;
+          doneChip.appendChild(doneDot);
+          doneChip.appendChild(el('span', null, 'Done'));
+          legend.appendChild(doneChip);
+
+          var t = el('button', 'mapkey linklike hide-done',
+            hideDoneOnMaps ? 'Show done (' + doneCount + ')' : 'Hide done (' + doneCount + ')');
+          t.type = 'button';
+          t.setAttribute('aria-pressed', hideDoneOnMaps ? 'true' : 'false');
+          t.title = hideDoneOnMaps
+            ? 'Put the places you have already done back on every map'
+            : 'Take the places you have already done off every map';
+          t.onclick = function (ev) {
+            ev.stopPropagation();
+            setHideDone(!hideDoneOnMaps);
+            rerender();
+          };
+          legend.appendChild(t);
+        }
         wrap.appendChild(legend);
       }
     }
@@ -23966,6 +24107,7 @@ var CityOps = (function () {
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       placeByHand: placeByHand, clearPoint: clearPoint, isHandPlaced: isHandPlaced,
       haversineM: haversineM, walkMinutes: walkMinutes, nearby: nearbyOf,
+      hideDone: hideDoneNow, setHideDone: setHideDone, DONE_COLOR: DONE_COLOR,
       nearSummary: nearSummaryText, nearUnavailable: nearUnavailableText,
       NEAR_RADIUS_M: NEAR_RADIUS_M,
       shortName: shortName,

@@ -34,10 +34,10 @@ const NEARBY = { schema: 1,
     { id: 'cistern', section: 'activities', status: 'plan', day: '2026-09-17',
       name: 'Basilica Cistern', note: 'n', links: [],
       geo: { lat: 41.0084, lng: 28.9779, source: 'nominatim' } },
-    { id: 'pandeli', section: 'dinner', status: 'plan', day: '2026-09-17',
+    { id: 'pandeli', section: 'dinner', status: 'done', day: '2026-09-17',
       name: 'Pandeli', note: 'n', links: [],
       geo: { lat: 41.0166, lng: 28.9704, source: 'nominatim' } },
-    { id: 'ciya', section: 'dinner', status: 'plan', day: '2026-09-17',
+    { id: 'ciya', section: 'dinner', status: 'done', day: '2026-09-17',
       name: 'Ciya Sofrasi', note: 'n', links: [],
       geo: { lat: 40.9893, lng: 29.0244, source: 'nominatim' } }
   ] };
@@ -498,6 +498,58 @@ async function openTrip(browser, mobile) {
   });
   check('the Near walk logged no page errors', () => {
     assert.equal(g.errors.length, 0, g.errors.join(' | '));
+  });
+
+  // 9. DONE PLACES: grey, and removable from every map at once.
+  const dn = await open(browser, NEARBY);
+  const doneBefore = await dn.page.evaluate(() => {
+    const grey = [...document.querySelectorAll('.mappin-dot')]
+      .filter((d) => (d.getAttribute('style') || '').indexOf('154, 163, 162') !== -1 ||
+        (d.getAttribute('style') || '').toLowerCase().indexOf('#9aa3a2') !== -1);
+    return { markers: document.querySelectorAll('.leaflet-marker-icon').length,
+      grey: grey.length,
+      toggles: document.querySelectorAll('.hide-done').length,
+      label: (document.querySelector('.hide-done') || {}).textContent || '',
+      maps: document.querySelectorAll('.leaflet-container').length };
+  });
+  check('a done place is grey on the map', () => {
+    assert.ok(doneBefore.maps >= 1, JSON.stringify(doneBefore));
+    assert.ok(doneBefore.grey >= 1,
+      'no grey pin for a done place: ' + JSON.stringify(doneBefore));
+    assert.ok(doneBefore.toggles >= 1, 'no Hide done control: ' + JSON.stringify(doneBefore));
+    assert.ok(/Hide done \(\d+\)/.test(doneBefore.label), doneBefore.label);
+  });
+
+  await dn.page.evaluate(() => { document.querySelector('.hide-done').click(); });
+  await dn.page.waitForTimeout(1800);
+  const hidden = await dn.page.evaluate(() => ({
+    markers: document.querySelectorAll('.leaflet-marker-icon').length,
+    toggles: document.querySelectorAll('.hide-done').length,
+    label: (document.querySelector('.hide-done') || {}).textContent || '',
+    maps: document.querySelectorAll('.leaflet-container').length
+  }));
+  check('Hide done takes them off every map at once, and offers the way back', () => {
+    assert.ok(hidden.markers < doneBefore.markers,
+      'nothing was removed: ' + JSON.stringify({ doneBefore: doneBefore.markers, hidden: hidden }));
+    // THE CONTROL MUST SURVIVE ITS OWN EFFECT. Counted from the guide, not
+    // from what is left on the map, or hiding would take the way back with it.
+    assert.ok(hidden.toggles >= 1,
+      'the toggle vanished with the pins, so there is no way back: ' + JSON.stringify(hidden));
+    assert.ok(/Show done \(\d+\)/.test(hidden.label), hidden.label);
+    assert.equal(hidden.maps, doneBefore.maps, 'a map disappeared rather than losing pins');
+  });
+
+  await dn.page.evaluate(() => { document.querySelector('.hide-done').click(); });
+  await dn.page.waitForTimeout(1800);
+  const restored = await dn.page.evaluate(() => ({
+    markers: document.querySelectorAll('.leaflet-marker-icon').length
+  }));
+  check('Show done puts them back', () => {
+    assert.equal(restored.markers, doneBefore.markers,
+      'the pins did not come back: ' + JSON.stringify({ doneBefore: doneBefore.markers, restored: restored }));
+  });
+  check('the done-places walk logged no page errors', () => {
+    assert.equal(dn.errors.length, 0, dn.errors.join(' | '));
   });
 
   await browser.close();
