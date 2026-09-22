@@ -2583,6 +2583,100 @@ test('pins are numbered in list order, and Near dims everything outside the answ
     'dimming removed pins instead of dimming them');
 });
 
+function doneGuide() {
+  return { schema: 1, city: { name: 'Istanbul', geo: { lat: 41.0082, lng: 28.9784 } },
+    sections: [{ id: 'dinner', label: 'Dinner' }, { id: 'activities', label: 'Activities' }],
+    items: [
+      { id: 'a', section: 'dinner', status: 'plan', name: 'Still to eat',
+        geo: { lat: 41.0086, lng: 28.9802, source: 'nominatim' } },
+      { id: 'b', section: 'dinner', status: 'done', name: 'Ate here Tuesday',
+        geo: { lat: 41.0084, lng: 28.9779, source: 'nominatim' } },
+      { id: 'c', section: 'activities', status: 'done', name: 'Saw this already',
+        geo: { lat: 41.0054, lng: 28.9768, source: 'nominatim' } },
+      { id: 'd', section: 'activities', status: 'plan', name: 'Still to see',
+        geo: { lat: 41.0090, lng: 28.9795, source: 'manual' } }
+    ] };
+}
+
+test('a done place goes grey and stops competing with what is still ahead', () => {
+  const M = C.mapKit;
+  M.setHideDone(false);
+  const r = M.points(doneGuide());
+  const by = {};
+  r.points.forEach((p) => { by[p.id] = p; });
+
+  assert.equal(by.b.done, true);
+  assert.equal(by.c.done, true);
+  assert.equal(by.a.done, false);
+
+  // Grey, and OUTSIDE the category palette: a done dinner must not read as a
+  // dinner still to book.
+  assert.equal(by.b.color, M.DONE_COLOR);
+  assert.equal(by.c.color, M.DONE_COLOR);
+  assert.notEqual(by.a.color, M.DONE_COLOR);
+  const palette = M.categories().map((c) => c.color);
+  assert.equal(palette.indexOf(M.DONE_COLOR), -1,
+    'the done grey is one of the category colours, so the two are indistinguishable');
+
+  // Still ON the map. "I ate there Tuesday" is what makes the pin next to it
+  // interesting, so done is context, not deletion.
+  assert.equal(r.points.length, 4);
+});
+
+test('Hide done removes them from every map, and the way back does not vanish with them', () => {
+  const M = C.mapKit;
+  const g = doneGuide();
+  M.setHideDone(false);
+  assert.equal(M.hideDone(), false);
+  assert.equal(M.points(g).points.length, 4);
+
+  // Hidden means GONE, not dimmed: dimming is already spent on Near.
+  M.setHideDone(true);
+  assert.equal(M.hideDone(), true);
+  const hidden = M.points(g, null, { hideDone: true });
+  assert.deepEqual(hidden.points.map((p) => p.id), ['a', 'd']);
+  assert.equal(hidden.points.filter((p) => p.done).length, 0);
+
+  // Numbering closes up over what is left, so the pins still match the list.
+  assert.deepEqual(hidden.points.map((p) => p.n), [1, 2]);
+
+  // THE TOGGLE MUST SURVIVE ITS OWN EFFECT. The button is counted from the
+  // whole guide, not from the points left on the map, or hiding them would
+  // take the only way back with them.
+  const block = M.renderBlock(g, null, {});
+  const toggles = block.querySelectorAll('[aria-pressed]');
+  assert.equal(toggles.length, 1, 'no Hide done control while done places are hidden');
+  assert.equal(toggles[0].getAttribute('aria-pressed'), 'true');
+  assert.ok(/Show done \(2\)/.test(toggles[0].textContent),
+    'the control does not offer the way back: ' + toggles[0].textContent);
+
+  M.setHideDone(false);
+  const back = M.renderBlock(g, null, {});
+  const t2 = back.querySelectorAll('[aria-pressed]');
+  assert.equal(t2[0].getAttribute('aria-pressed'), 'false');
+  assert.ok(/Hide done \(2\)/.test(t2[0].textContent), t2[0].textContent);
+});
+
+test('a guide with nothing done is offered no Hide done control at all', () => {
+  const M = C.mapKit;
+  M.setHideDone(false);
+  const none = { schema: 1, city: { name: 'Istanbul' },
+    sections: [{ id: 'dinner', label: 'Dinner' }],
+    items: [{ id: 'a', section: 'dinner', status: 'plan', name: 'A',
+      geo: { lat: 41.0086, lng: 28.9802, source: 'nominatim' } }] };
+  const block = M.renderBlock(none, null, {});
+  assert.equal(block.querySelectorAll('[aria-pressed]').length, 0,
+    'a control that can only ever do nothing was still drawn');
+  // And a done place with no coordinate is not counted: it was never on the
+  // map, so hiding it would change nothing and the number would lie.
+  const unplacedDone = { schema: 1, city: { name: 'Istanbul' },
+    sections: [{ id: 'dinner', label: 'Dinner' }],
+    items: [{ id: 'a', section: 'dinner', status: 'plan', name: 'A',
+      geo: { lat: 41.0086, lng: 28.9802, source: 'nominatim' } },
+      { id: 'z', section: 'dinner', status: 'done', name: 'Never placed' }] };
+  assert.equal(M.renderBlock(unplacedDone, null, {}).querySelectorAll('[aria-pressed]').length, 0);
+});
+
 test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
   // 18 of Rob's 35 Istanbul places were searched and are simply not in
   // OpenStreetMap; 2 more have no address to search on. Query tuning cannot
