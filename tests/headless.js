@@ -16,6 +16,32 @@ const SEC = [{ id: 'dinner', label: 'Dinner', icon: 'x' },
   { id: 'activities', label: 'Activities', icon: 'x' }];
 
 // Two items WITH geo, so markers must appear without any network at all.
+// A Sultanahmet cluster plus one place across the Bosphorus, so Near has both
+// an answer and something it must exclude.
+const NEARBY = { schema: 1,
+  city: { name: 'Istanbul', country: 'TUR', dates: { from: '2026-09-16', to: '2026-09-25' },
+    geo: { lat: 41.0082, lng: 28.9784, source: 'nominatim' } },
+  sections: [{ id: 'dinner', label: 'Dinner', icon: 'x' },
+    { id: 'activities', label: 'Activities', icon: 'x' }],
+  // All on ONE DAY on purpose, so the Plan map carries the whole cluster AND
+  // the two places Near must exclude. On a tab holding only the neighbours
+  // there is nothing left to dim and the dimming check would pass by having
+  // nothing to do.
+  items: [
+    { id: 'hagia', section: 'activities', status: 'plan', day: '2026-09-17',
+      name: 'Hagia Sophia', note: 'n', links: [],
+      geo: { lat: 41.0086, lng: 28.9802, source: 'nominatim' } },
+    { id: 'cistern', section: 'activities', status: 'plan', day: '2026-09-17',
+      name: 'Basilica Cistern', note: 'n', links: [],
+      geo: { lat: 41.0084, lng: 28.9779, source: 'nominatim' } },
+    { id: 'pandeli', section: 'dinner', status: 'plan', day: '2026-09-17',
+      name: 'Pandeli', note: 'n', links: [],
+      geo: { lat: 41.0166, lng: 28.9704, source: 'nominatim' } },
+    { id: 'ciya', section: 'dinner', status: 'plan', day: '2026-09-17',
+      name: 'Ciya Sofrasi', note: 'n', links: [],
+      geo: { lat: 40.9893, lng: 29.0244, source: 'nominatim' } }
+  ] };
+
 const PLACED = { schema: 1,
   city: { name: 'Istanbul', country: 'TUR', dates: { from: '2026-09-16', to: '2026-09-25' },
     geo: { lat: 41.0082, lng: 28.9784, source: 'nominatim' } },
@@ -398,6 +424,81 @@ async function openTrip(browser, mobile) {
       assert.equal(t.errors.length, 0, t.errors.join(' | '));
     });
   }
+
+  // 8. NEAR, in a real browser.
+  //
+  // Rob's words: "This helps me arrange and align activities that are near each
+  // other." The unit tests prove the arithmetic; this proves the traveler can
+  // actually get to it: a control on a placed card, an answer in place, and the
+  // map dimming what is not in it.
+  const g = await open(browser, NEARBY);
+  const pinsBefore = await g.page.evaluate(() => ({
+    markers: document.querySelectorAll('.leaflet-marker-icon').length,
+    numbered: document.querySelectorAll('.mappin-n').length,
+    firstNumber: (document.querySelector('.mappin-n') || {}).textContent || '',
+    nearButtons: document.querySelectorAll('.near-btn').length
+  }));
+  check('every pin carries its list number', () => {
+    assert.ok(pinsBefore.markers >= 4, JSON.stringify(pinsBefore));
+    assert.ok(pinsBefore.numbered >= 4,
+      'pins are not numbered, so "the third one down" and "that pin" are different objects: ' +
+      JSON.stringify(pinsBefore));
+    assert.equal(pinsBefore.firstNumber, '1');
+  });
+  check('a placed card offers Near', () => {
+    assert.ok(pinsBefore.nearButtons >= 1, 'no Near control on any card');
+  });
+
+  // Open Near on Hagia Sophia, from the Plan tab the app lands on.
+  const nearOpened = await g.page.evaluate(() => {
+    const card = document.querySelector('[data-item-id="hagia"]');
+    if (!card) return 'no-card';
+    const b = card.querySelector('.near-btn');
+    if (!b) return 'no-button';
+    b.click();
+    return 'clicked';
+  });
+  await g.page.waitForTimeout(1500);
+  const nearAfter = await g.page.evaluate(() => {
+    const panel = document.querySelector('.nearpanel');
+    const rows = panel ? [...panel.querySelectorAll('.nearrow')] : [];
+    return {
+      panel: !!panel,
+      summary: panel ? (panel.querySelector('p') || {}).textContent || '' : '',
+      names: rows.map((r) => (r.querySelector('.linklike') || {}).textContent || ''),
+      minutes: rows.map((r) => (r.querySelector('.nearmins') || {}).textContent || ''),
+      tabs: rows.map((r) => (r.querySelector('.neartab') || {}).textContent || ''),
+      dimmed: document.querySelectorAll('.mappin.pin-dim').length,
+      bright: document.querySelectorAll('.leaflet-marker-icon:not(.pin-dim)').length,
+      anchors: document.querySelectorAll('.mappin.pin-anchor').length,
+      stillDrawn: document.querySelectorAll('.leaflet-marker-icon').length
+    };
+  });
+  check('Near answers in place, with a walk time and the tab it lives on', () => {
+    assert.equal(nearOpened, 'clicked', 'could not reach the Near control: ' + nearOpened);
+    assert.ok(nearAfter.panel, 'Near opened no panel: ' + JSON.stringify(nearAfter));
+    assert.ok(/within about a 15 minute walk/.test(nearAfter.summary), nearAfter.summary);
+    assert.ok(nearAfter.names.indexOf('Basilica Cistern') !== -1,
+      'the nearest place is missing from the answer: ' + JSON.stringify(nearAfter.names));
+    assert.ok(/\d+ min/.test(nearAfter.minutes.join(' ')),
+      'no walking time on the rows: ' + JSON.stringify(nearAfter.minutes));
+    assert.ok(nearAfter.names.indexOf('Ciya Sofrasi') === -1,
+      'a place across the Bosphorus was listed as a walk');
+  });
+  check('Near dims the rest of the map without removing it', () => {
+    assert.ok(nearAfter.dimmed >= 1,
+      'nothing was dimmed, so the cluster is not visible at a glance: ' + JSON.stringify(nearAfter));
+    assert.equal(nearAfter.stillDrawn, pinsBefore.markers,
+      'dimming removed pins instead of dimming them: ' + JSON.stringify(nearAfter));
+    // One per map, and the Plan tab draws two: the whole-guide map and the
+    // day's own. Both must mark the anchor, so this is at-least-one rather
+    // than exactly-one.
+    assert.ok(nearAfter.anchors >= 1,
+      'the card Near was opened from is not marked on the map: ' + JSON.stringify(nearAfter));
+  });
+  check('the Near walk logged no page errors', () => {
+    assert.equal(g.errors.length, 0, g.errors.join(' | '));
+  });
 
   await browser.close();
   console.log(failed ? failed + ' headless check(s) failed' : 'all headless checks passed');

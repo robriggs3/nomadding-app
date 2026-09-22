@@ -2434,6 +2434,155 @@ test('both shells read the same refresh counter the sync banner reads', () => {
   });
 });
 
+function istanbulGuide() {
+  // Real coordinates, real distances, so the numbers below are checkable
+  // against a map rather than against themselves.
+  return { schema: 1, city: { name: 'Istanbul', geo: { lat: 41.0082, lng: 28.9784 } },
+    sections: [{ id: 'dinner', label: 'Dinner' }, { id: 'activities', label: 'Activities' },
+      { id: 'services', label: 'Services' }],
+    items: [
+      { id: 'hagia', section: 'activities', status: 'plan', name: 'Hagia Sophia',
+        geo: { lat: 41.0086, lng: 28.9802, source: 'nominatim' } },
+      { id: 'cistern', section: 'activities', status: 'plan', name: 'Basilica Cistern',
+        geo: { lat: 41.0084, lng: 28.9779, source: 'nominatim' } },
+      { id: 'blue', section: 'activities', status: 'plan', name: 'Blue Mosque',
+        geo: { lat: 41.0054, lng: 28.9768, source: 'nominatim' } },
+      { id: 'pandeli', section: 'dinner', status: 'plan', name: 'Pandeli',
+        geo: { lat: 41.0166, lng: 28.9704, source: 'nominatim' } },
+      { id: 'ciya', section: 'dinner', status: 'plan', name: 'Ciya Sofrasi',
+        geo: { lat: 40.9893, lng: 29.0244, source: 'nominatim' } },
+      { id: 'barber', section: 'services', status: 'plan', name: 'A barber',
+        geo: { lat: 41.0090, lng: 28.9795, source: 'manual' } },
+      { id: 'unplaced', section: 'dinner', status: 'plan', name: 'Somewhere nobody mapped' },
+      { id: 'new-slug', section: 'dinner', status: 'plan', name: 'A place to eat' }
+    ] };
+}
+
+test('Near measures a real walk, and rounds it the way a person says it', () => {
+  const M = C.mapKit;
+  // Hagia Sophia to the Basilica Cistern is about 200 m on the ground.
+  const m = M.haversineM({ lat: 41.0086, lng: 28.9802 }, { lat: 41.0084, lng: 28.9779 });
+  assert.ok(m > 150 && m < 250, 'got ' + m + ' m for a walk that is about 200');
+  // Hagia Sophia to Ciya is across the Bosphorus, well outside any walk.
+  const far = M.haversineM({ lat: 41.0086, lng: 28.9802 }, { lat: 40.9893, lng: 29.0244 });
+  assert.ok(far > 4000, 'got ' + far + ' m across the Bosphorus');
+
+  // Rounded to 5, and never to zero: "0 minutes" is not an answer a person
+  // gives, and next door is honestly "about 5" at this precision.
+  assert.equal(M.walkMinutes(0), 5);
+  assert.equal(M.walkMinutes(30), 5);
+  assert.equal(M.walkMinutes(200), 5);
+  assert.equal(M.walkMinutes(900), 10);
+  // The radius itself quotes as the 15 minutes the copy promises. If this ever
+  // disagrees, the app is telling the traveler a number it does not mean.
+  assert.equal(M.walkMinutes(M.NEAR_RADIUS_M), 15);
+  assert.equal(M.walkMinutes(null), null);
+});
+
+test('Near searches across tabs, because the point is pairing dinner with a thing to do', () => {
+  const M = C.mapKit;
+  const g = istanbulGuide();
+  const near = M.nearby(g, 'hagia');
+  const ids = near.map((n) => n.id);
+
+  // Everything in Sultanahmet, nearest first.
+  assert.deepEqual(ids, ['barber', 'cistern', 'blue'],
+    'wrong set or wrong order: ' + JSON.stringify(near.map((n) => [n.id, n.metres])));
+  assert.ok(near[0].metres < near[1].metres);
+
+  // ACROSS TABS: the barber is Services and the mosque is Do, from an
+  // activities card. A same-tab search would have answered with neither.
+  const tabs = near.map((n) => n.tab).sort();
+  assert.deepEqual([...new Set(tabs)].sort(), ['do', 'services'],
+    'Near did not cross tabs, which is the whole feature');
+  assert.equal(near[0].tabLabel, 'Services');
+
+  // Across the water is not near, whatever the straight line says.
+  assert.equal(ids.indexOf('ciya'), -1, 'a place across the Bosphorus was called a walk');
+  // Itself is never in its own answer.
+  assert.equal(ids.indexOf('hagia'), -1);
+  // Unplaced and placeholder items cannot be measured and are not guessed at.
+  assert.equal(ids.indexOf('unplaced'), -1);
+  assert.equal(ids.indexOf('new-slug'), -1);
+
+  // Every row carries what the panel prints.
+  near.forEach((n) => {
+    assert.ok(n.minutes >= 5, n.id + ' has no walking time');
+    assert.ok(n.color, n.id + ' has no category colour');
+    assert.ok(n.name, n.id + ' has no name');
+  });
+});
+
+test('the Near radius includes its own boundary and excludes what is past it', () => {
+  const M = C.mapKit;
+  const g = istanbulGuide();
+  // A point placed just inside and just outside 1200 m due north of Hagia
+  // Sophia. 0.001 degrees of latitude is about 111 m.
+  const at = (dLat) => ({ schema: 1, city: g.city, sections: g.sections,
+    items: [g.items[0], { id: 'probe', section: 'dinner', name: 'Probe',
+      geo: { lat: 41.0086 + dLat, lng: 28.9802, source: 'manual' } }] });
+  const inside = M.nearby(at(0.0107), 'hagia');    // ~1188 m
+  const outside = M.nearby(at(0.0109), 'hagia');   // ~1210 m
+  assert.equal(inside.length, 1, 'a place inside the radius was dropped: ' + JSON.stringify(inside));
+  assert.ok(inside[0].metres <= M.NEAR_RADIUS_M);
+  assert.equal(outside.length, 0,
+    'a place past the radius was listed: ' + JSON.stringify(outside));
+});
+
+test('Near says nothing-yet rather than nothing, and refuses to guess for an unplaced card', () => {
+  const M = C.mapKit;
+  const g = istanbulGuide();
+  assert.equal(M.nearSummary(M.nearby(g, 'hagia'), 'Hagia Sophia'),
+    '3 places are within about a 15 minute walk of Hagia Sophia.');
+  assert.equal(M.nearSummary([], 'Ciya Sofrasi'),
+    'Nothing else in this guide is within a 15 minute walk of Ciya Sofrasi.');
+  assert.equal(M.nearSummary(M.nearby(g, 'ciya'), 'Ciya Sofrasi'),
+    'Nothing else in this guide is within a 15 minute walk of Ciya Sofrasi.');
+  // One is singular.
+  assert.ok(/^1 place is /.test(M.nearSummary([{ id: 'x' }], 'X')));
+
+  // An unplaced card gets no Near at all, and a reason that names the fix,
+  // which since #51 is something the traveler can do in one tap.
+  const unplaced = g.items.filter((i) => i.id === 'unplaced')[0];
+  assert.ok(/Place it and Near starts working/.test(M.nearUnavailable(unplaced)));
+  // A placed card has nothing to explain.
+  assert.equal(M.nearUnavailable(g.items[0]), '');
+  // Template filler is not a place and gets no explanation either.
+  assert.equal(M.nearUnavailable(g.items.filter((i) => i.id === 'new-slug')[0]), '');
+
+  // Measuring from a card that cannot be measured from returns nothing rather
+  // than throwing, and never a list of everything.
+  assert.deepEqual(M.nearby(g, 'unplaced'), []);
+  assert.deepEqual(M.nearby(g, 'no-such-id'), []);
+});
+
+test('pins are numbered in list order, and Near dims everything outside the answer', () => {
+  const M = C.mapKit;
+  const g = istanbulGuide();
+  const r = M.points(g);
+  // Numbered 1..n in LIST order, not by distance: the list is what the
+  // traveler arranged by hand.
+  assert.deepEqual(r.points.map((p) => p.n), [1, 2, 3, 4, 5, 6]);
+  assert.equal(r.points[0].name, 'Hagia Sophia');
+
+  // No Near open: nothing is dimmed, and the map reads as it always did.
+  const plain = M.renderBlock(g, null, {});
+  assert.equal(plain.mapPayload.dimming, false);
+  assert.equal(plain.mapPayload.points.filter((p) => p.dim).length, 0);
+
+  // Near open on Hagia Sophia: its three neighbours and the anchor stay bright,
+  // everything else dims. A dimmed pin is still drawn, because the cluster has
+  // to be seen sitting inside the wider set.
+  const near = M.nearby(g, 'hagia').map((n) => n.id).concat(['hagia']);
+  const dimmed = M.renderBlock(g, null, { nearIds: near, nearAnchor: 'hagia' });
+  assert.equal(dimmed.mapPayload.dimming, true);
+  const bright = dimmed.mapPayload.points.filter((p) => !p.dim).map((p) => p.id).sort();
+  assert.deepEqual(bright, ['barber', 'blue', 'cistern', 'hagia'].sort());
+  assert.equal(dimmed.mapPayload.points.filter((p) => p.anchor).length, 1);
+  assert.equal(dimmed.mapPayload.points.length, plain.mapPayload.points.length,
+    'dimming removed pins instead of dimming them');
+});
+
 test('a place OpenStreetMap has never heard of can be pinned by hand', () => {
   // 18 of Rob's 35 Istanbul places were searched and are simply not in
   // OpenStreetMap; 2 more have no address to search on. Query tuning cannot

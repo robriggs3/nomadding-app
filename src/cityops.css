@@ -639,6 +639,27 @@
    z-index:0 is the same statement for browsers that reach it first, and
    position:relative is what makes either take effect. */
 .mapblock { margin: 0 0 14px; position: relative; z-index: 0; isolation: isolate; }
+
+/* ---- Near ---- */
+.near-btn.near-open { background: var(--accent-soft, #eef4f4); }
+.nearpanel { margin-top: 8px; padding: 8px 10px; border-radius: 10px;
+  background: var(--card-2, #f6f8f8); border: 1px solid var(--line, #dbe4e3); }
+.nearpanel p { margin: 0 0 6px; }
+.nearlist { list-style: none; margin: 0; padding: 0; display: flex;
+  flex-direction: column; gap: 6px; }
+.nearrow { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+/* Tabular figures so a column of walking times lines up and can be compared
+   at a glance, which is the whole job of this list. */
+.nearmins { font-variant-numeric: tabular-nums; font-weight: 600; }
+.neartab { color: var(--text-3, #6b7a79); font-size: .85em; }
+/* A dimmed pin is still THERE. It is context: the traveler needs to see that
+   the cluster sits inside the wider set, not that the rest of the guide
+   vanished. Pointer events stay on so a dimmed pin can still be tapped. */
+.mappin.pin-dim { opacity: .28; }
+.mappin.pin-anchor .mappin-dot { box-shadow: 0 0 0 3px rgba(157,24,29,.45); }
+.mappin-n { font-size: 9px; font-weight: 700; color: #fff; line-height: 16px;
+  display: block; text-align: center; font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 1px rgba(0,0,0,.4); }
 .mapcanvas {
   width: 100%; border-radius: 10px; border: 1px solid var(--line, #dbe4e3);
   background: var(--card, #f2f5f4); overflow: hidden;

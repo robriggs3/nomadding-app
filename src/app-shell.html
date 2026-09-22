@@ -1674,10 +1674,19 @@
   // this app looks for the marker class, because that is the one Leaflet
   // documents, so a circle reads as "no markers" to the very checks meant to
   // catch a map regression. The dot looks the same and is now findable.
-  function pinIcon(L, color) {
+  // A coloured dot carrying its list NUMBER, and knowing whether it is dimmed.
+  //
+  // The number is what makes "the third one down" and "that pin" the same
+  // object; it follows the list order the traveler arranged by hand, never
+  // distance. .leaflet-marker-icon is kept (see the note above) because every
+  // headless check looks for it.
+  function pinIcon(L, color, p) {
+    var pt = p || {};
+    var cls = 'mappin' + (pt.dim ? ' pin-dim' : '') + (pt.anchor ? ' pin-anchor' : '');
+    var inner = pt.n ? '<span class="mappin-n">' + pt.n + '</span>' : '';
     return L.divIcon({
-      className: 'mappin',
-      html: '<span class="mappin-dot" style="background:' + color + '"></span>',
+      className: cls,
+      html: '<span class="mappin-dot" style="background:' + color + '">' + inner + '</span>',
       iconSize: [16, 16], iconAnchor: [8, 8], tooltipAnchor: [0, -8]
     });
   }
@@ -1742,7 +1751,7 @@
           var marks = {};
           b.mapAddPin = function (p) {
             try {
-              var mk2 = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color) }).addTo(map);
+              var mk2 = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color, p) }).addTo(map);
               mk2.bindTooltip(p.name, { direction: 'top' });
               mk2.on('click', function () { gotoItem(p.id); });
               marks[p.id] = mk2;
@@ -1752,7 +1761,7 @@
             } catch (e) { /* one pin is never worth the page */ }
           };
           pay.points.forEach(function (p) {
-            var mk = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color) }).addTo(map);
+            var mk = L.marker([p.lat, p.lng], { icon: pinIcon(L, p.color, p) }).addTo(map);
             mk.bindTooltip(p.name, { direction: 'top' });
             mk.on('click', function () { gotoItem(p.id); });
             marks[p.id] = mk;
