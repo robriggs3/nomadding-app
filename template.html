@@ -857,6 +857,27 @@
    z-index:0 is the same statement for browsers that reach it first, and
    position:relative is what makes either take effect. */
 .mapblock { margin: 0 0 14px; position: relative; z-index: 0; isolation: isolate; }
+
+/* ---- Near ---- */
+.near-btn.near-open { background: var(--accent-soft, #eef4f4); }
+.nearpanel { margin-top: 8px; padding: 8px 10px; border-radius: 10px;
+  background: var(--card-2, #f6f8f8); border: 1px solid var(--line, #dbe4e3); }
+.nearpanel p { margin: 0 0 6px; }
+.nearlist { list-style: none; margin: 0; padding: 0; display: flex;
+  flex-direction: column; gap: 6px; }
+.nearrow { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+/* Tabular figures so a column of walking times lines up and can be compared
+   at a glance, which is the whole job of this list. */
+.nearmins { font-variant-numeric: tabular-nums; font-weight: 600; }
+.neartab { color: var(--text-3, #6b7a79); font-size: .85em; }
+/* A dimmed pin is still THERE. It is context: the traveler needs to see that
+   the cluster sits inside the wider set, not that the rest of the guide
+   vanished. Pointer events stay on so a dimmed pin can still be tapped. */
+.mappin.pin-dim { opacity: .28; }
+.mappin.pin-anchor .mappin-dot { box-shadow: 0 0 0 3px rgba(157,24,29,.45); }
+.mappin-n { font-size: 9px; font-weight: 700; color: #fff; line-height: 16px;
+  display: block; text-align: center; font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 1px rgba(0,0,0,.4); }
 .mapcanvas {
   width: 100%; border-radius: 10px; border: 1px solid var(--line, #dbe4e3);
   background: var(--card, #f2f5f4); overflow: hidden;
@@ -2536,7 +2557,11 @@ var CityOps = (function () {
       var p = itemPoint(it);
       var cat = mapCategory(secById[it.section] || { id: it.section });
       if (p) {
-        points.push({ id: it.id, name: it.name || it.id, section: it.section,
+        // NUMBERED to match the list beneath, in LIST order, not by distance:
+        // the list is the thing the traveler arranges by hand, so "the third
+        // one down" and "pin 3" have to be the same object.
+        points.push({ id: it.id, n: points.length + 1,
+          name: it.name || it.id, section: it.section,
           category: cat, color: mapColor(cat), lat: p.lat, lng: p.lng, source: p.source,
           byHand: isHandPlaced(it), day: it.day || null });
       } else {
@@ -2611,6 +2636,111 @@ var CityOps = (function () {
       delete it.geo;
     });
     return had ? out : null;
+  }
+
+  // ---- "Near": what else is worth doing while I am over there ----
+  //
+  // Rob's words: "This helps me arrange and align activities that are near each
+  // other." So this is not a radius search, it is PAIRING. He is holding one
+  // place and wants to know what else in the whole guide is a walk away, which
+  // is why it searches ACROSS TABS: the point is pairing a dinner with an
+  // activity, and those live on different tabs.
+
+  // 1.2 km, quoted to the traveler as "about 15 minutes". Beyond it nothing is
+  // listed at all: there is no "near-ish", because a list that trails off into
+  // half-hour walks is a list nobody trusts the top of.
+  var NEAR_RADIUS_M = 1200;
+  // 80 metres a minute, 4.8 km/h. An unhurried walk with a bag, not a stride.
+  var WALK_M_PER_MIN = 80;
+
+  function toRad(d) { return d * Math.PI / 180; }
+
+  // Straight-line metres. Deliberately NOT a routing service: this runs with no
+  // network, instantly, on a cached coordinate the guide already carries, and
+  // it is right for the question being asked. A river or a hill can make a
+  // 900 m line a 20 minute walk, which is why the copy says "about".
+  function haversineM(a, b) {
+    if (!a || !b) return null;
+    var R = 6371000;
+    var dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+    var la1 = toRad(a.lat), la2 = toRad(b.lat);
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+  }
+
+  // Rounded to 5, and never to zero. "0 minutes" is not an answer a person
+  // gives; next door is "about 5 minutes" and that is honest at this precision.
+  function walkMinutes(metres) {
+    if (metres === null || metres === undefined || !isFinite(metres)) return null;
+    var m = Math.round(metres / WALK_M_PER_MIN / 5) * 5;
+    return m < 5 ? 5 : m;
+  }
+
+  // Everything in the guide within a walk of one item, nearest first.
+  // Excludes itself, archived items and placeholder text, and anything not
+  // placed: an unplaced item has no coordinate to compare, and guessing at one
+  // is the wrong-pin failure all over again.
+  function nearbyOf(data, id, opts) {
+    var o = opts || {};
+    var radius = o.radiusM || NEAR_RADIUS_M;
+    var items = (data && Array.isArray(data.items)) ? data.items : [];
+    var self = null;
+    items.forEach(function (it) { if (it && it.id === id) self = it; });
+    var from = itemPoint(self);
+    if (!from) return [];
+    var secById = {};
+    ((data && data.sections) || []).forEach(function (sec) { if (sec && sec.id) secById[sec.id] = sec; });
+    var out = [];
+    items.forEach(function (it) {
+      if (!it || it.id === id || it.status === 'archived') return;
+      if (placeholderReason(it)) return;
+      var p = itemPoint(it);
+      if (!p) return;
+      var m = haversineM(from, p);
+      if (m === null || m > radius) return;
+      var sec = secById[it.section] || { id: it.section };
+      var cat = mapCategory(sec);
+      out.push({ id: it.id, name: it.name || it.id, section: it.section,
+        sectionLabel: sec.label || '', tab: tabForSection(sec),
+        tabLabel: tabLabel(tabForSection(sec)),
+        category: cat, color: mapColor(cat),
+        metres: m, minutes: walkMinutes(m) });
+    });
+    // Nearest first, then by name so the order is stable between renders for
+    // two places the same distance away.
+    out.sort(function (a, b) {
+      if (a.metres !== b.metres) return a.metres - b.metres;
+      return String(a.name).localeCompare(String(b.name));
+    });
+    return out;
+  }
+
+  function tabLabel(tabId) {
+    var found = '';
+    TABS.forEach(function (t) { if (t.id === tabId) found = t.label; });
+    return found;
+  }
+
+  // The one line above the list. Says the radius in the unit a person walks in.
+  function nearSummaryText(list, name) {
+    var who = name ? ('of ' + name) : 'of here';
+    if (!list || !list.length) {
+      return 'Nothing else in this guide is within a 15 minute walk ' + who + '.';
+    }
+    return (list.length === 1 ? '1 place is' : list.length + ' places are') +
+      ' within about a 15 minute walk ' + who + '.';
+  }
+
+  // Why a card has no Near control, when it has none. An unplaced card gets
+  // the "Place it" answer rather than an empty list, and since #51 that is
+  // something the traveler can actually do in one tap.
+  function nearUnavailableText(item) {
+    if (!item) return '';
+    if (placeholderReason(item)) return '';
+    if (itemPoint(item)) return '';
+    return 'Not on the map yet, so there is nothing to measure from. ' +
+      'Place it and Near starts working for it.';
   }
 
   function setTab(state, tabId) {
@@ -8630,6 +8760,10 @@ var CityOps = (function () {
   var pendingPromote = null; // item id whose promote day-picker is open (session-only UI state)
   var pendingMove = null;    // item id whose move day-picker is open
   var pendingEdit = null;    // item id whose title editor is open
+  // The card whose Near panel is open, or null. Session-only like the three
+  // above: "what is near this" is a question being asked right now, not a
+  // planning decision worth remembering across visits.
+  var nearOpenFor = null;
   // Phase 4: explicit expand/collapse OVERRIDES the traveler has made this
   // session (id -> true/false). Session-only (like the three pending* vars
   // above), reset on every boot(). Absent means "use the default": a
@@ -9084,6 +9218,65 @@ var CityOps = (function () {
     return b;
   }
 
+  // The Near control, and the panel it opens.
+  //
+  // Offered only on a PLACED card. An unplaced one gets no control at all
+  // rather than a control that returns nothing, because "no results" and
+  // "cannot be measured" are different answers and only one of them is the
+  // traveler's to fix. Since #51 he can fix it in one tap, so the panel says
+  // so when he opens Near on a card that has no pin.
+  function nearBtn(it) {
+    if (!it || placeholderReason(it) || !itemPoint(it)) return null;
+    var open = nearOpenFor === it.id;
+    var b = el('button', 'ctl near-btn' + (open ? ' near-open' : ''), open ? '📍 Near ✕' : '📍 Near');
+    b.type = 'button';
+    var aria = open ? 'Close what is near ' + (it.name || 'this place')
+      : 'What else is within a walk of ' + (it.name || 'this place');
+    b.setAttribute('aria-label', aria);
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.title = open ? 'Back to the whole map' : 'What else is within about a 15 minute walk';
+    b.onclick = function (ev) {
+      ev.stopPropagation();
+      nearOpenFor = open ? null : it.id;
+      rerender();
+    };
+    return b;
+  }
+
+  // The answer, in place, not on a new screen: he is holding this card.
+  function nearPanel(it, data) {
+    var panel = el('div', 'nearpanel');
+    var list = nearbyOf(data, it.id);
+    panel.appendChild(el('p', 'diff', nearSummaryText(list, it.name || '')));
+    if (!list.length) {
+      // Not a failure. On a guide where little is placed this is the common
+      // answer, and it should read as "nothing nearby YET".
+      panel.appendChild(el('p', 'mapwhy',
+        'Places still missing from the map cannot be counted here. Anything you place ' +
+        'starts showing up.'));
+      return panel;
+    }
+    var ul = el('ul', 'nearlist');
+    list.forEach(function (n) {
+      var li = el('li', 'nearrow');
+      var dot = el('span', 'mapdot');
+      dot.style.background = n.color;
+      li.appendChild(dot);
+      var jump = el('button', 'linklike', n.name);
+      jump.type = 'button';
+      jump.setAttribute('data-goto-item', n.id);
+      li.appendChild(jump);
+      // Minutes first: it is the number he is deciding on. The tab is second,
+      // because a dinner and an activity living on different tabs is the whole
+      // reason this searches across them.
+      li.appendChild(el('span', 'nearmins', ' ' + n.minutes + ' min'));
+      if (n.tabLabel) li.appendChild(el('span', 'neartab', ' · ' + n.tabLabel));
+      ul.appendChild(li);
+    });
+    panel.appendChild(ul);
+    return panel;
+  }
+
   // Section lookup for a card that only knows its section ID. Rebuilt once per
   // render (see rerender) rather than scanned per card.
   var secById = null;
@@ -9179,6 +9372,8 @@ var CityOps = (function () {
       if (ask) ctl.appendChild(ask);
       var place = mapPinBtn(it);
       if (place) ctl.appendChild(place);
+      var near = nearBtn(it);
+      if (near) ctl.appendChild(near);
       var ed = el('button', 'ctl icon-btn ctl-more', '✎');
       ed.type = 'button';
       ed.setAttribute('aria-label', 'Rename');
@@ -9255,6 +9450,11 @@ var CityOps = (function () {
     if (!itemPanelTakenOver(it, status, withDayPicker)) {
       var ctl = itemControlRow(it, status, withDayPicker);
       if (ctl) container.appendChild(ctl);
+    }
+    // Last of all, so the card reads title, detail, controls, then the answer
+    // to the question the controls just asked.
+    if (nearOpenFor === it.id && ctx) {
+      container.appendChild(nearPanel(it, effectiveData(ctx.base, curState || emptyState())));
     }
   }
 
@@ -9666,6 +9866,23 @@ var CityOps = (function () {
     return out;
   }
 
+  // The Near answer as map options, for every map on the page. One helper so
+  // the four call sites cannot drift into dimming differently.
+  function nearMapOpts(data) {
+    if (!nearOpenFor) return {};
+    var list = nearbyOf(data, nearOpenFor);
+    var ids = list.map(function (n) { return n.id; });
+    ids.push(nearOpenFor);        // the anchor stays bright
+    return { nearIds: ids, nearAnchor: nearOpenFor };
+  }
+
+  function mergeOpts(a, b) {
+    var out = {};
+    Object.keys(a || {}).forEach(function (k) { out[k] = a[k]; });
+    Object.keys(b || {}).forEach(function (k) { out[k] = b[k]; });
+    return out;
+  }
+
   function renderMapBlock(data, items, opts) {
     var o = opts || {};
     var r = mapPoints(data, items);
@@ -9696,8 +9913,21 @@ var CityOps = (function () {
       canvas.setAttribute('aria-label', o.label || 'Map of these places');
       wrap.appendChild(canvas);
       // What the shell needs to draw into it, without re-deriving any of it.
+      // When a Near panel is open, every pin that is NOT in the answer is
+      // dimmed, so the cluster the traveler asked about is visible at a glance
+      // rather than having to be read off a list. The anchor stays bright.
+      var nearSet = null;
+      if (o.nearIds) {
+        nearSet = {};
+        o.nearIds.forEach(function (nid) { nearSet[nid] = 1; });
+      }
+      r.points.forEach(function (pt) {
+        pt.dim = !!(nearSet && !nearSet[pt.id]);
+        pt.anchor = !!(o.nearAnchor && pt.id === o.nearAnchor);
+      });
       wrap.mapPayload = { id: id, points: r.points, fit: r.points.length > 0,
-        center: cityCenter(data), missing: r.missing.length };
+        center: cityCenter(data), missing: r.missing.length,
+        dimming: !!nearSet };
 
       if (o.legend !== false) {
         var seen = {};
@@ -9771,7 +10001,8 @@ var CityOps = (function () {
     });
     var tabMap = tabItems.length
       ? renderMapBlock(effectiveData(ctx.base, state), tabItems,
-          { height: 240, label: 'Map of these places' })
+          mergeOpts({ height: 240, label: 'Map of these places' },
+            nearMapOpts(effectiveData(ctx.base, state))))
       : null;
     if (tabMap) main.appendChild(tabMap);
     var xall = sectionExpandAllRow(vms, totalItems);
@@ -9837,7 +10068,8 @@ var CityOps = (function () {
     });
     var infoMap = infoItems.length
       ? renderMapBlock(effectiveData(ctx.base, state), infoItems,
-          { height: 220, label: 'Map of these places' })
+          mergeOpts({ height: 220, label: 'Map of these places' },
+            nearMapOpts(effectiveData(ctx.base, state))))
       : null;
     if (infoMap) main.appendChild(infoMap);
     var xall = sectionExpandAllRow(vms, totalItems);
@@ -10448,7 +10680,7 @@ var CityOps = (function () {
     // question is how far apart today's places are, not where the week is.
     if (data) {
       var dayMap = renderMapBlock(data, entries.map(function (e) { return e.it; }),
-        { height: 180, legend: false, label: 'Map of this day' });
+        mergeOpts({ height: 180, legend: false, label: 'Map of this day' }, nearMapOpts(data)));
       if (dayMap) list.appendChild(dayMap);
     }
     entries.forEach(function (e) {
@@ -10488,7 +10720,8 @@ var CityOps = (function () {
     pm.days.forEach(function (d) { if (d.iso) dayAutos[d.iso] = !!d.auto; });
     // One map over the whole stay, before anything else on the page: where the
     // places ARE is the first question somebody standing in the city asks.
-    var planMap = renderMapBlock(data, null, { height: 300, label: 'Map of every place in this guide' });
+    var planMap = renderMapBlock(data, null,
+      mergeOpts({ height: 300, label: 'Map of every place in this guide' }, nearMapOpts(data)));
     if (planMap) main.appendChild(planMap);
     var xall = renderExpandAll(dayIsos.length > 1, function (st, collapsed) {
       setPlanDaysCollapsed(st, dayIsos, collapsed, dayAutos);
@@ -11649,6 +11882,9 @@ var CityOps = (function () {
       cityCenter: cityCenter, cacheCityGeo: cacheCityGeo,
       plan: geocodePlan, accept: acceptGeocode, district: districtFrom,
       placeByHand: placeByHand, clearPoint: clearPoint, isHandPlaced: isHandPlaced,
+      haversineM: haversineM, walkMinutes: walkMinutes, nearby: nearbyOf,
+      nearSummary: nearSummaryText, nearUnavailable: nearUnavailableText,
+      NEAR_RADIUS_M: NEAR_RADIUS_M,
       shortName: shortName,
       BBOX_PAD_DEG: BBOX_PAD_DEG,
       renderBlock: renderMapBlock
