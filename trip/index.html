@@ -20650,6 +20650,145 @@ function buildBatchCityScorePrompt(cities) {
   return lines.join("\n");
 }
 
+// BEGIN batch-score-core (tests/batch-score.js extracts this block between the markers)
+// Why this exists: one API call used to score every candidate, with a fixed
+// small output budget. A long list made the model run out of room mid-JSON,
+// and the paste-flow wording ("copy the file again") reached Rob for an API
+// call. This block sizes the budget to the batch, notices a cut-off reply by
+// the API's own stop_reason, keeps the items that arrived whole, and asks again
+// for only the rest (halving when nothing usable arrived). Pure logic: the API
+// call, the JSON reader and the message sink are passed in so a test can stub
+// all three.
+
+// Complete {...} items from the "results" array of a reply that may stop in
+// the middle. String-aware, so braces inside a note do not confuse it. A
+// half-written last item is dropped; every item returned parsed on its own.
+function salvageScoreItems(text) {
+  const out = [];
+  const at = String(text || '').search(/"results"\s*:\s*\[/);
+  if (at < 0) return out;
+  const src = String(text);
+  let i = src.indexOf('[', at) + 1, depth = 0, start = -1, inStr = false, esc = false;
+  for (; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(src.slice(start, i + 1))); } catch (e) { /* skip a malformed item */ }
+        start = -1;
+      }
+      if (depth < 0) break;
+    } else if (ch === ']' && depth === 0) break;
+  }
+  return out;
+}
+
+// Output budget for n items: a base for the wrapper plus a per-item share,
+// capped. maxItemsPerCall is how many fit under the cap, so an oversized list
+// is split up front rather than discovered the hard way.
+function scoreBudget(n, perItem, base, cap) {
+  return {
+    maxTokens: Math.min(cap, base + n * perItem),
+    maxItemsPerCall: Math.max(1, Math.floor((cap - base) / perItem))
+  };
+}
+
+// opts: items [{id}], noun, perItemTokens, baseTokens, maxTokensCap,
+//       buildPrompt(chunk), call(prompt, maxTokens) -> {text, stopReason, usage},
+//       read(text) -> {ok, data}, notify(msg)
+// Returns { results, usage: {input, output}, calls }.
+async function scoreInBatches(opts) {
+  const noun = opts.noun || 'items';
+  const notify = opts.notify || function () {};
+  const results = [];
+  const usage = { input: 0, output: 0 };
+  let calls = 0;
+  const first = scoreBudget(opts.items.length, opts.perItemTokens, opts.baseTokens, opts.maxTokensCap).maxItemsPerCall;
+  const queue = [];
+  for (let i = 0; i < opts.items.length; i += first) queue.push(opts.items.slice(i, i + first));
+
+  while (queue.length) {
+    const chunk = queue.shift();
+    const budget = scoreBudget(chunk.length, opts.perItemTokens, opts.baseTokens, opts.maxTokensCap);
+    const reply = await opts.call(opts.buildPrompt(chunk), budget.maxTokens);
+    calls++;
+    if (reply.usage) {
+      usage.input += reply.usage.input_tokens || 0;
+      usage.output += reply.usage.output_tokens || 0;
+    }
+    const hitLimit = reply.stopReason === 'max_tokens';
+    const read = opts.read(reply.text);
+    if (read.ok && !hitLimit) {
+      (read.data && read.data.results || []).forEach(r => results.push(r));
+      continue;
+    }
+
+    // Cut off (the API said so, or the JSON never closed). Keep what arrived whole.
+    const got = (read.ok ? (read.data && read.data.results || []) : salvageScoreItems(reply.text))
+      .filter(r => r && chunk.some(c => c.id === r.id));
+    const gotIds = new Set(got.map(r => r.id));
+    const rest = chunk.filter(c => !gotIds.has(c.id));
+    const cause = hitLimit
+      ? 'the reply reached its length limit (' + budget.maxTokens + ' tokens)'
+      : 'the reply ended before its JSON was complete';
+    if (rest.length === 0) { got.forEach(r => results.push(r)); continue; }
+    if (got.length === 0 && chunk.length === 1) {
+      throw new Error('The scoring reply from the API was incomplete even for a single item (' + cause +
+        '). Nothing was applied.');
+    }
+    got.forEach(r => results.push(r));
+    if (got.length > 0) {
+      notify('The scoring reply was cut off after ' + got.length + ' of ' + chunk.length + ' ' + noun +
+        ' (' + cause + '); scoring the rest in a second call.');
+      queue.unshift(rest);
+    } else {
+      notify('The scoring reply from the API was incomplete (stopped after 0 ' + noun + '; ' + cause +
+        '). Retrying in smaller batches.');
+      const mid = Math.ceil(rest.length / 2);
+      queue.unshift(rest.slice(0, mid), rest.slice(mid));
+    }
+  }
+  return { results, usage, calls };
+}
+
+// The live wiring: aiMessages for the call, the tolerant reader for the read.
+// Deliberately NOT parseAiJson: its error text is the paste flow's.
+function scoreBatchLive(items, noun, buildPrompt, perItemTokens, baseTokens) {
+  return scoreInBatches({
+    items, noun, buildPrompt, perItemTokens, baseTokens,
+    maxTokensCap: 16000,
+    notify: msg => toast(msg),
+    read: text => CityOps.intakeKit.read(text, { mode: 'raw' }),
+    call: async (prompt, maxTokens) => {
+      const res = await aiMessages({
+        model: 'claude-sonnet-5',
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error('API error (' + res.status + '): ' + errText.slice(0, 200));
+      }
+      const data = await res.json();
+      if (data.usage) trackAIUsage(data.usage.input_tokens, data.usage.output_tokens);
+      return {
+        text: (data.content || []).map(b => b.text || '').join('').trim(),
+        stopReason: data.stop_reason,
+        usage: data.usage
+      };
+    }
+  });
+}
+// END batch-score-core
+
 async function batchScoreCities(forceRescoreAll) {
   if (!apiAiReady()) {
     toast(apiAiWhyNot(), 'error');
@@ -20667,23 +20806,12 @@ async function batchScoreCities(forceRescoreAll) {
   // Ensure objective scores computed first
   candidates.forEach(c => autoScoreCity(c.id));
 
-  const prompt = buildBatchCityScorePrompt(candidates);
   toast(`Scoring ${candidates.length} cities…`);
 
   try {
-    const res = await aiMessages({
-      model: 'claude-sonnet-5',
-      max_tokens: Math.min(8000, 400 + candidates.length * 300),
-      messages: [{ role: 'user', content: prompt }]
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error('API error (' + res.status + '): ' + errText.slice(0, 200));
-    }
-    const data = await res.json();
-    if (data.usage) trackAIUsage(data.usage.input_tokens, data.usage.output_tokens);
-    const text = (data.content || []).map(b => b.text || '').join('').trim();
-    const parsed = parseAiJson(text, 'The scoring reply');
+    const out = await scoreBatchLive(candidates, 'cities', buildBatchCityScorePrompt, 450, 600);
+    const parsed = { results: out.results };
+    const data = { usage: { input_tokens: out.usage.input, output_tokens: out.usage.output } };
 
     let applied = 0;
     (parsed.results || []).forEach(r => {
@@ -20769,23 +20897,12 @@ async function batchScoreAccommodations(cityId, forceRescoreAll) {
     return;
   }
 
-  const prompt = buildBatchAccomScorePrompt(city, candidates);
   toast(`Scoring ${candidates.length} properties…`);
 
   try {
-    const res = await aiMessages({
-      model: 'claude-sonnet-5',
-      max_tokens: Math.min(4000, 300 + candidates.length * 200),
-      messages: [{ role: 'user', content: prompt }]
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error('API error (' + res.status + '): ' + errText.slice(0, 200));
-    }
-    const data = await res.json();
-    if (data.usage) trackAIUsage(data.usage.input_tokens, data.usage.output_tokens);
-    const text = (data.content || []).map(b => b.text || '').join('').trim();
-    const parsed = parseAiJson(text, 'The scoring reply');
+    const out = await scoreBatchLive(candidates, 'properties', chunk => buildBatchAccomScorePrompt(city, chunk), 350, 600);
+    const parsed = { results: out.results };
+    const data = { usage: { input_tokens: out.usage.input, output_tokens: out.usage.output } };
 
     let applied = 0;
     (parsed.results || []).forEach(r => {

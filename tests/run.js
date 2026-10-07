@@ -10545,6 +10545,118 @@ test('intake: every fixture is exercised by the tests above', () => {
   ]);
 });
 
+// ---- batch scoring: cut-off replies (trip/index.html, batch-score-core block) ----
+// The block is lifted out of the page by its markers, as above, and run with the
+// API call, the JSON reader and the message sink stubbed. Pure logic, no browser.
+const batchCore = (() => {
+  const fs = require('fs');
+  const path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'trip', 'index.html'), 'utf8');
+  const a = html.indexOf('// BEGIN batch-score-core');
+  const b = html.indexOf('// END batch-score-core');
+  assert.ok(a > 0 && b > a, 'batch-score-core markers present in trip/index.html');
+  // scoreBatchLive needs the page; the pure functions do not, and referencing
+  // its globals only inside a function body is harmless until called.
+  return new Function(html.slice(a, b) +
+    '\nreturn { salvageScoreItems, scoreBudget, scoreInBatches };')();
+})();
+const jsonRead = (t) => { try { return { ok: true, data: JSON.parse(t) }; } catch (e) { return { ok: false }; } };
+const mkItems = (n) => Array.from({ length: n }, (_, i) => ({ id: 'a' + (i + 1) }));
+const fitJson = (ids, cutAfterChars) => {
+  const full = '{"results": [' + ids.map(id =>
+    '{"id":"' + id + '","fit":{"score":70,"note":"has a {brace} and \\"quote\\""}}').join(',') + ']}';
+  return cutAfterChars == null ? full : full.slice(0, cutAfterChars);
+};
+
+test('scoreBudget grows with the batch and respects the cap', () => {
+  const small = batchCore.scoreBudget(3, 350, 600, 16000);
+  const huge = batchCore.scoreBudget(500, 350, 600, 16000);
+  assert.equal(small.maxTokens, 600 + 3 * 350);
+  assert.equal(huge.maxTokens, 16000);
+  assert.equal(huge.maxItemsPerCall, Math.floor(15400 / 350));
+});
+test('salvageScoreItems keeps whole items and drops the half-written one', () => {
+  const text = fitJson(['a1', 'a2', 'a3']);
+  const cut = text.slice(0, text.lastIndexOf('{"id":"a3"') + 20);
+  const got = batchCore.salvageScoreItems(cut);
+  assert.deepEqual(got.map(r => r.id), ['a1', 'a2']);
+});
+asyncTest('stop_reason max_tokens: keeps the arrived items, scores the rest in a second call, merges', async () => {
+  const items = mkItems(4);
+  const calls = [], notes = [];
+  const full = fitJson(['a1', 'a2', 'a3', 'a4']);
+  const cut = full.slice(0, full.indexOf('{"id":"a3"') + 15);   // a1, a2 whole; a3 half
+  const out = await batchCore.scoreInBatches({
+    items, noun: 'properties', perItemTokens: 350, baseTokens: 600, maxTokensCap: 16000,
+    buildPrompt: chunk => chunk.map(c => c.id).join(','),
+    read: jsonRead, notify: m => notes.push(m),
+    call: async (prompt, maxTokens) => {
+      calls.push(prompt);
+      return calls.length === 1
+        ? { text: cut, stopReason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 5 } }
+        : { text: fitJson(prompt.split(',')), stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } };
+    }
+  });
+  assert.deepEqual(calls, ['a1,a2,a3,a4', 'a3,a4']);
+  assert.deepEqual(out.results.map(r => r.id), ['a1', 'a2', 'a3', 'a4']);
+  assert.equal(out.usage.input, 20);
+  assert.equal(notes.length, 1);
+  assert.ok(/cut off after 2 of 4 properties/.test(notes[0]) && /second call/.test(notes[0]), notes[0]);
+  assert.ok(!/paste|copy the file|preview/i.test(notes[0]), 'no paste-flow wording');
+});
+asyncTest('mid-JSON stop with nothing usable: halves the batch and merges', async () => {
+  const items = mkItems(4);
+  const sizes = [], notes = [];
+  const out = await batchCore.scoreInBatches({
+    items, noun: 'properties', perItemTokens: 350, baseTokens: 600, maxTokensCap: 16000,
+    buildPrompt: chunk => chunk.map(c => c.id).join(','),
+    read: jsonRead, notify: m => notes.push(m),
+    call: async (prompt) => {
+      const ids = prompt.split(',');
+      sizes.push(ids.length);
+      // 4 at once is too many; reply stops inside the first item, no stop_reason given
+      return ids.length > 2
+        ? { text: '{"results": [{"id":"a1","fit":{"sco', stopReason: 'end_turn' }
+        : { text: fitJson(ids), stopReason: 'end_turn' };
+    }
+  });
+  assert.deepEqual(sizes, [4, 2, 2]);
+  assert.deepEqual(out.results.map(r => r.id), ['a1', 'a2', 'a3', 'a4']);
+  assert.ok(/incomplete \(stopped after 0 properties/.test(notes[0]) && /smaller batches/.test(notes[0]), notes[0]);
+  assert.ok(!/paste|copy the file|preview/i.test(notes[0]));
+});
+asyncTest('an item that cannot fit even alone fails with API wording, not paste wording', async () => {
+  let err = null;
+  try {
+    await batchCore.scoreInBatches({
+      items: mkItems(1), noun: 'properties', perItemTokens: 350, baseTokens: 600, maxTokensCap: 16000,
+      buildPrompt: () => 'a1', read: jsonRead,
+      call: async () => ({ text: '{"results": [{"id":"a1","fi', stopReason: 'max_tokens' })
+    });
+  } catch (e) { err = e; }
+  assert.ok(err, 'throws');
+  assert.ok(/from the API was incomplete/.test(err.message) && /length limit/.test(err.message), err.message);
+  assert.ok(!/paste|copy the file|preview/i.test(err.message));
+});
+asyncTest('a complete reply makes exactly one call and no notice', async () => {
+  const notes = []; let n = 0;
+  const out = await batchCore.scoreInBatches({
+    items: mkItems(3), noun: 'properties', perItemTokens: 350, baseTokens: 600, maxTokensCap: 16000,
+    buildPrompt: c => c.map(x => x.id).join(','), read: jsonRead, notify: m => notes.push(m),
+    call: async (p) => { n++; return { text: fitJson(p.split(',')), stopReason: 'end_turn' }; }
+  });
+  assert.equal(n, 1); assert.equal(out.results.length, 3); assert.equal(notes.length, 0);
+});
+asyncTest('a list larger than one call can hold is split up front', async () => {
+  const sizes = [];
+  await batchCore.scoreInBatches({
+    items: mkItems(100), noun: 'properties', perItemTokens: 350, baseTokens: 600, maxTokensCap: 16000,
+    buildPrompt: c => c.map(x => x.id).join(','), read: jsonRead,
+    call: async (p, max) => { const ids = p.split(','); sizes.push(ids.length); assert.ok(max <= 16000); return { text: fitJson(ids), stopReason: 'end_turn' }; }
+  });
+  assert.ok(sizes.length >= 3 && sizes.every(s => s <= 44), sizes.join(','));
+});
+
 // The async tests above resolve on a microtask, so the summary has to wait
 // for them or it reports before they have run and the exit code lies.
 //
