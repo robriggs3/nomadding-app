@@ -1,5 +1,3 @@
-žée
-
 ## Standing authorization (Rob Riggs, 2026-10-07 18:38Z)
 
 Rob's words: "add it, for all other threads. i need you to be orchestrator and pull me out of the loop."
